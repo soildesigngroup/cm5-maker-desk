@@ -294,7 +294,7 @@ class HMIJsonAPI:
                 data={'traceback': traceback.format_exc()}
             )
     
-    def _handle_adc_command(self, device: ADS7828, action: str, params: Dict, request_id: str) -> APIResponse:
+    def _handle_adc_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
         """Handle ADC-specific commands"""
         
         if action == 'read_channel':
@@ -355,7 +355,7 @@ class HMIJsonAPI:
         else:
             return self._error_response(f"Unknown ADC action: {action}", request_id)
     
-    def _handle_io_command(self, device: PCAL9555A, action: str, params: Dict, request_id: str) -> APIResponse:
+    def _handle_io_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
         """Handle I/O expander commands"""
         
         if action == 'read_pin':
@@ -450,7 +450,7 @@ class HMIJsonAPI:
         else:
             return self._error_response(f"Unknown I/O action: {action}", request_id)
     
-    def _handle_rtc_command(self, device: PCF85063A, action: str, params: Dict, request_id: str) -> APIResponse:
+    def _handle_rtc_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
         """Handle RTC commands"""
         
         if action == 'read_datetime':
@@ -509,7 +509,7 @@ class HMIJsonAPI:
         else:
             return self._error_response(f"Unknown RTC action: {action}", request_id)
     
-    def _handle_fan_command(self, device: EMC2301, action: str, params: Dict, request_id: str) -> APIResponse:
+    def _handle_fan_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
         """Handle fan controller commands"""
         
         if action == 'set_pwm':
@@ -590,7 +590,7 @@ class HMIJsonAPI:
         else:
             return self._error_response(f"Unknown fan action: {action}", request_id)
     
-    def _handle_eeprom_command(self, device: AT24CM01, action: str, params: Dict, request_id: str) -> APIResponse:
+    def _handle_eeprom_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
         """Handle EEPROM commands"""
         
         if action == 'read':
