@@ -38,12 +38,69 @@ export interface FanStatus {
   failure?: boolean;
 }
 
+export interface ADCDataPoint {
+  timestamp: number;
+  channel: number;
+  raw_value: number;
+  voltage: number;
+  vref: number;
+}
+
+export interface LoggingStats {
+  enabled: boolean;
+  active: boolean;
+  sample_interval: number;
+  memory_points_per_channel: Record<string, number>;
+  total_memory_points: number;
+  queue_size: number;
+  current_log_file?: string;
+}
+
+export interface LoggedDataResponse {
+  logged_data: Record<string, ADCDataPoint[]>;
+  logging_stats: LoggingStats;
+}
+
+export interface CameraInfo {
+  camera_id: number;
+  camera_type: 'usb' | 'picamera';
+  name: string;
+  resolution: [number, number];
+  available: boolean;
+}
+
+export interface Detection {
+  class_id: number;
+  class_name: string;
+  confidence: number;
+  bbox: [number, number, number, number]; // x1, y1, x2, y2
+  timestamp: number;
+}
+
+export interface AIVisionStatus {
+  active: boolean;
+  model_loaded: boolean;
+  camera_active: boolean;
+  current_camera?: CameraInfo;
+  available_cameras: CameraInfo[];
+  model_name: string;
+  fps: number;
+  total_detections: number;
+  last_detection_time?: number;
+}
+
+export interface DetectionResult {
+  timestamp: number;
+  detections: Detection[];
+  fps: number;
+}
+
 export class HMIApiService {
   private baseUrl: string;
   private ws: WebSocket | null = null;
   private eventCallbacks: Map<string, (data: any) => void> = new Map();
 
-  constructor(baseUrl: string = 'http://localhost:8080') {
+  constructor(baseUrl: string = 'http://localhost:8082') {
     this.baseUrl = baseUrl;
   }
 
@@ -218,6 +275,140 @@ export class HMIApiService {
       params: { datetime },
       request_id: `rtc_set_${Date.now()}`,
     });
+  }
+
+  // ADC Logging Commands
+  async getLoggedData(
+    channel?: number,
+    maxPoints?: number,
+    timeRangeSeconds?: number
+  ): Promise<APIResponse<LoggedDataResponse>> {
+    return this.sendCommand<LoggedDataResponse>({
+      action: 'get_logged_data',
+      device: 'adc',
+      params: {
+        channel,
+        max_points: maxPoints,
+        time_range_seconds: timeRangeSeconds
+      },
+      request_id: `adc_logged_${Date.now()}`,
+    });
+  }
+
+  async startADCLogging(): Promise<APIResponse<{ logging_active: boolean }>> {
+    return this.sendCommand({
+      action: 'start_logging',
+      device: 'adc',
+      request_id: `adc_start_log_${Date.now()}`,
+    });
+  }
+
+  async stopADCLogging(): Promise<APIResponse<{ logging_active: boolean }>> {
+    return this.sendCommand({
+      action: 'stop_logging',
+      device: 'adc',
+      request_id: `adc_stop_log_${Date.now()}`,
+    });
+  }
+
+  async getLoggingStats(): Promise<APIResponse<LoggingStats>> {
+    return this.sendCommand<LoggingStats>({
+      action: 'get_logging_stats',
+      device: 'adc',
+      request_id: `adc_log_stats_${Date.now()}`,
+    });
+  }
+
+  async exportADCDataCSV(
+    filename?: string,
+    channel?: number,
+    timeRangeSeconds?: number
+  ): Promise<APIResponse<{ filename: string; exported: boolean }>> {
+    return this.sendCommand({
+      action: 'export_csv',
+      device: 'adc',
+      params: {
+        filename,
+        channel,
+        time_range_seconds: timeRangeSeconds
+      },
+      request_id: `adc_export_${Date.now()}`,
+    });
+  }
+
+  // AI-Vision Commands
+  async getAIVisionStatus(): Promise<APIResponse<AIVisionStatus>> {
+    return this.sendCommand<AIVisionStatus>({
+      action: 'get_status',
+      device: 'ai_vision',
+      request_id: `ai_vision_status_${Date.now()}`,
+    });
+  }
+
+  async listCameras(): Promise<APIResponse<{ cameras: CameraInfo[] }>> {
+    return this.sendCommand({
+      action: 'list_cameras',
+      device: 'ai_vision',
+      request_id: `ai_vision_cameras_${Date.now()}`,
+    });
+  }
+
+  async startAIVision(
+    cameraId: number = 0,
+    modelName: string = 'yolo11n.pt'
+  ): Promise<APIResponse<{ active: boolean; camera_id: number; model_name: string }>> {
+    return this.sendCommand({
+      action: 'start',
+      device: 'ai_vision',
+      params: { camera_id: cameraId, model_name: modelName },
+      request_id: `ai_vision_start_${Date.now()}`,
+    });
+  }
+
+  async stopAIVision(): Promise<APIResponse<{ active: boolean }>> {
+    return this.sendCommand({
+      action: 'stop',
+      device: 'ai_vision',
+      request_id: `ai_vision_stop_${Date.now()}`,
+    });
+  }
+
+  async setConfidenceThreshold(confidence: number): Promise<APIResponse<{ confidence_threshold: number }>> {
+    return this.sendCommand({
+      action: 'set_confidence',
+      device: 'ai_vision',
+      params: { confidence },
+      request_id: `ai_vision_confidence_${Date.now()}`,
+    });
+  }
+
+  async getAIVisionFrame(): Promise<APIResponse<{ frame: string; format: string; active: boolean }>> {
+    return this.sendCommand({
+      action: 'get_frame',
+      device: 'ai_vision',
+      request_id: `ai_vision_frame_${Date.now()}`,
+    });
+  }
+
+  async getDetections(maxCount: number = 10): Promise<APIResponse<{ detections: DetectionResult[]; count: number }>> {
+    return this.sendCommand({
+      action: 'get_detections',
+      device: 'ai_vision',
+      params: { max_count: maxCount },
+      request_id: `ai_vision_detections_${Date.now()}`,
+    });
+  }
+
+  async getAvailableModels(): Promise<APIResponse<{ available_models: string[] }>> {
+    return this.sendCommand({
+      action: 'get_available_models',
+      device: 'ai_vision',
+      request_id: `ai_vision_models_${Date.now()}`,
+    });
+  }
+
+  getVideoStreamUrl(): string {
+    return `${this.baseUrl}/api/ai_vision/stream`;
   }
 
   // WebSocket Connection

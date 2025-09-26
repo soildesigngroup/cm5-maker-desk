@@ -6,9 +6,10 @@ import { IOControl } from '@/components/hmi/IOControl';
 import { FanController } from '@/components/hmi/FanController';
 import { RTCDisplay } from '@/components/hmi/RTCDisplay';
 import { ConnectionSettings } from '@/components/hmi/ConnectionSettings';
+import { AIVision } from '@/components/hmi/AIVision';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Cpu, BarChart3, ToggleLeft, Fan, Clock, Settings, Menu } from 'lucide-react';
+import { Cpu, BarChart3, ToggleLeft, Fan, Clock, Settings, Menu, Eye } from 'lucide-react';
 
 const Index = () => {
   const [apiService, setApiService] = useState(new HMIApiService());
@@ -55,7 +56,7 @@ const Index = () => {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-6 lg:w-auto lg:grid-cols-6">
+          <TabsList className="grid w-full grid-cols-7 lg:w-auto lg:grid-cols-7">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <Menu className="w-4 h-4" />
               <span className="hidden sm:inline">Overview</span>
@@ -75,6 +76,10 @@ const Index = () => {
             <TabsTrigger value="rtc" className="flex items-center gap-2">
               <Clock className="w-4 h-4" />
               <span className="hidden sm:inline">RTC</span>
+            </TabsTrigger>
+            <TabsTrigger value="ai_vision" className="flex items-center gap-2">
+              <Eye className="w-4 h-4" />
+              <span className="hidden sm:inline">AI-Vision</span>
             </TabsTrigger>
             <TabsTrigger value="settings" className="flex items-center gap-2">
               <Settings className="w-4 h-4" />
@@ -106,6 +111,10 @@ const Index = () => {
 
           <TabsContent value="rtc" className="animate-fade-in">
             <RTCDisplay apiService={apiService} />
+          </TabsContent>
+
+          <TabsContent value="ai_vision" className="animate-fade-in">
+            <AIVision apiService={apiService} />
           </TabsContent>
 
           <TabsContent value="settings" className="animate-fade-in">

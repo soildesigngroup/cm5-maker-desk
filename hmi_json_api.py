@@ -14,10 +14,13 @@ import time
 import threading
 import queue
 import traceback
+import os
+import csv
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, asdict
 import uuid
+from collections import defaultdict, deque
 
 # Import device classes (assumes they're available)
 try:
@@ -28,6 +31,15 @@ try:
     from at24cm01_eeprom import AT24CM01
 except ImportError as e:
     print(f"Warning: Some device modules not available: {e}")
+
+# Import AI-Vision system
+try:
+    from ai_vision_system import get_ai_vision_system, AIVisionSystem
+    AI_VISION_AVAILABLE = True
+    print("AI-Vision system available")
+except ImportError as e:
+    print(f"Warning: AI-Vision system not available: {e}")
+    AI_VISION_AVAILABLE = False
 
 @dataclass
 class DeviceStatus:
@@ -48,6 +60,218 @@ class APIResponse:
     data: Optional[Dict] = None
     error: Optional[str] = None
     warnings: Optional[List[str]] = None
+
+@dataclass
+class ADCDataPoint:
+    """Single ADC data point for logging"""
+    timestamp: float
+    channel: int
+    raw_value: int
+    voltage: float
+    vref: float
+
+@dataclass
+class LoggingConfig:
+    """Configuration for data logging"""
+    enabled: bool = False
+    sample_interval: float = 1.0  # seconds
+    max_memory_points: int = 3600  # 1 hour at 1Hz
+    file_rotation_hours: int = 24
+    log_directory: str = "logs"
+    channels: List[int] = None  # None means all channels
+
+class ADCDataLogger:
+    """
+    ADC Data Logger - handles time-series logging of ADC readings
+    Supports both in-memory and file-based storage
+    """
+
+    def __init__(self, config: LoggingConfig = None):
+        self.config = config or LoggingConfig()
+
+        # In-memory data storage (channel -> deque of data points)
+        self.memory_data: Dict[int, deque] = defaultdict(lambda: deque(maxlen=self.config.max_memory_points))
+
+        # File logging
+        self.current_log_file = None
+        self.log_file_start_time = None
+        self.logging_thread = None
+        self.logging_active = False
+        self.data_queue = queue.Queue(maxsize=10000)
+
+        # Create log directory
+        if self.config.enabled:
+            os.makedirs(self.config.log_directory, exist_ok=True)
+
+    def start_logging(self):
+        """Start the background logging thread"""
+        if self.logging_active:
+            return
+
+        self.logging_active = True
+        self.logging_thread = threading.Thread(target=self._logging_worker, daemon=True)
+        self.logging_thread.start()
+        print("ADC logging started")
+
+    def stop_logging(self):
+        """Stop the background logging thread"""
+        self.logging_active = False
+        if self.logging_thread:
+            self.logging_thread.join(timeout=5)
+        if self.current_log_file:
+            self.current_log_file.close()
+            self.current_log_file = None
+        print("ADC logging stopped")
+
+    def log_adc_reading(self, data_point: ADCDataPoint):
+        """Add an ADC reading to the logging queue"""
+        if not self.config.enabled:
+            return
+
+        # Check if we should log this channel
+        if self.config.channels is not None and data_point.channel not in self.config.channels:
+            return
+
+        # Add to memory storage
+        self.memory_data[data_point.channel].append(data_point)
+
+        # Add to file logging queue
+        try:
+            self.data_queue.put_nowait(data_point)
+        except queue.Full:
+            print("WARNING: ADC logging queue full, dropping data point")
+
+    def get_recent_data(self, channel: int = None, max_points: int = None, time_range_seconds: int = None) -> Dict[int, List[ADCDataPoint]]:
+        """Get recent data from memory storage"""
+        result = {}
+
+        channels_to_get = [channel] if channel is not None else list(self.memory_data.keys())
+
+        for ch in channels_to_get:
+            if ch not in self.memory_data:
+                continue
+
+            data = list(self.memory_data[ch])
+
+            # Apply time range filter
+            if time_range_seconds:
+                cutoff_time = time.time() - time_range_seconds
+                data = [dp for dp in data if dp.timestamp >= cutoff_time]
+
+            # Apply max points limit
+            if max_points:
+                data = data[-max_points:]
+
+            result[ch] = data
+
+        return result
+
+    def get_logging_stats(self) -> Dict:
+        """Get statistics about the logging system"""
+        stats = {
+            'enabled': self.config.enabled,
+            'active': self.logging_active,
+            'sample_interval': self.config.sample_interval,
+            'memory_points_per_channel': {ch: len(data) for ch, data in self.memory_data.items()},
+            'total_memory_points': sum(len(data) for data in self.memory_data.values()),
+            'queue_size': self.data_queue.qsize() if hasattr(self.data_queue, 'qsize') else 0,
+            'current_log_file': os.path.basename(self.current_log_file.name) if self.current_log_file else None
+        }
+        return stats
+
+    def export_data_csv(self, filename: str, channel: int = None, time_range_seconds: int = None) -> bool:
+        """Export data to CSV file"""
+        try:
+            data = self.get_recent_data(channel=channel, time_range_seconds=time_range_seconds)
+
+            with open(filename, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['timestamp', 'datetime', 'channel', 'raw_value', 'voltage', 'vref'])
+
+                # Combine all channels and sort by timestamp
+                all_points = []
+                for ch, points in data.items():
+                    all_points.extend(points)
+
+                all_points.sort(key=lambda x: x.timestamp)
+
+                for point in all_points:
+                    dt = datetime.fromtimestamp(point.timestamp)
+                    writer.writerow([
+                        point.timestamp,
+                        dt.isoformat(),
+                        point.channel,
+                        point.raw_value,
+                        point.voltage,
+                        point.vref
+                    ])
+
+            return True
+
+        except Exception as e:
+            print(f"Failed to export CSV: {e}")
+            return False
+
+    def _logging_worker(self):
+        """Background thread worker for file logging"""
+        while self.logging_active:
+            try:
+                # Check if we need to rotate log file
+                self._check_log_rotation()
+
+                # Process queued data points
+                try:
+                    data_point = self.data_queue.get(timeout=1.0)
+                    self._write_to_file(data_point)
+                except queue.Empty:
+                    continue
+
+            except Exception as e:
+                print(f"Error in logging worker: {e}")
+                time.sleep(1)
+
+    def _check_log_rotation(self):
+        """Check if we need to rotate the log file"""
+        current_time = time.time()
+
+        if (self.current_log_file is None or
+            self.log_file_start_time is None or
+            (current_time - self.log_file_start_time) > (self.config.file_rotation_hours * 3600)):
+
+            # Close current file
+            if self.current_log_file:
+                self.current_log_file.close()
+
+            # Create new file
+            timestamp = datetime.fromtimestamp(current_time).strftime("%Y%m%d_%H%M%S")
+            filename = f"adc_data_{timestamp}.csv"
+            filepath = os.path.join(self.config.log_directory, filename)
+
+            self.current_log_file = open(filepath, 'w', newline='')
+            self.log_file_start_time = current_time
+
+            # Write header
+            writer = csv.writer(self.current_log_file)
+            writer.writerow(['timestamp', 'datetime', 'channel', 'raw_value', 'voltage', 'vref'])
+
+            print(f"Started new log file: {filename}")
+
+    def _write_to_file(self, data_point: ADCDataPoint):
+        """Write a data point to the current log file"""
+        if not self.current_log_file:
+            return
+
+        writer = csv.writer(self.current_log_file)
+        dt = datetime.fromtimestamp(data_point.timestamp)
+        writer.writerow([
+            data_point.timestamp,
+            dt.isoformat(),
+            data_point.channel,
+            data_point.raw_value,
+            data_point.voltage,
+            data_point.vref
+        ])
+        self.current_log_file.flush()
 
 class HMIJsonAPI:
     """
@@ -72,7 +296,8 @@ class HMIJsonAPI:
             'io': {'class': PCAL9555A, 'address': 0x24},
             'rtc': {'class': PCF85063A, 'address': 0x51},
             'fan': {'class': EMC2301, 'address': 0x2F},
-            'eeprom': {'class': AT24CM01, 'base_address': 0x56}
+            'eeprom': {'class': AT24CM01, 'base_address': 0x56},
+            'ai_vision': {'class': None, 'enabled': AI_VISION_AVAILABLE}
         }
         
         # API state
@@ -84,10 +309,45 @@ class HMIJsonAPI:
         
         # Device status tracking
         self.device_status = {}
-        
+
+        # ADC Data Logger
+        logging_config = LoggingConfig(
+            enabled=True,
+            sample_interval=2.0,
+            max_memory_points=1800,  # 1 hour at 2 second intervals
+            file_rotation_hours=24,
+            log_directory="adc_logs"
+        )
+        self.adc_logger = ADCDataLogger(logging_config)
+
         # Initialize devices if requested
         if auto_connect:
             self.initialize_devices()
+
+        # Start ADC logging if enabled
+        if self.adc_logger.config.enabled:
+            self.adc_logger.start_logging()
+
+        # Initialize AI-Vision system
+        if AI_VISION_AVAILABLE:
+            self.ai_vision = get_ai_vision_system()
+            try:
+                if self.ai_vision.initialize():
+                    print("AI-Vision system initialized successfully")
+                    self.devices['ai_vision'] = self.ai_vision
+                    self.device_status['ai_vision'] = DeviceStatus(
+                        device_type="AIVisionSystem",
+                        device_id="ai_vision",
+                        connected=True,
+                        last_update=time.time(),
+                        capabilities=['object_detection', 'camera_streaming', 'real_time_inference']
+                    )
+                else:
+                    print("Failed to initialize AI-Vision system")
+            except Exception as e:
+                print(f"Error initializing AI-Vision: {e}")
+        else:
+            self.ai_vision = None
     
     def initialize_devices(self) -> Dict[str, bool]:
         """
@@ -100,8 +360,12 @@ class HMIJsonAPI:
         
         for device_id, config in self.device_configs.items():
             try:
+                # Skip AI-Vision as it's handled separately
+                if device_id == 'ai_vision':
+                    continue
+
                 device_class = config['class']
-                
+
                 # Create device instance with appropriate parameters
                 if device_id == 'adc':
                     device = device_class(
@@ -277,6 +541,8 @@ class HMIJsonAPI:
                 return self._handle_fan_command(device, action, params, request_id)
             elif device_id == 'eeprom':
                 return self._handle_eeprom_command(device, action, params, request_id)
+            elif device_id == 'ai_vision':
+                return self._handle_ai_vision_command(device, action, params, request_id)
             else:
                 return APIResponse(
                     success=False,
@@ -301,13 +567,25 @@ class HMIJsonAPI:
             channel = params.get('channel', 0)
             if not (0 <= channel <= 7):
                 return self._error_response("Channel must be 0-7", request_id)
-            
-            raw_value = device.read_channel(channel)
-            voltage = device.read_channel_voltage(channel)
-            
+
+            # Use averaged reading for stability
+            raw_value = device.read_channel_averaged(channel, samples=4)
+            voltage = (raw_value / 4095.0) * device.vref
+            timestamp = time.time()
+
+            # Log the reading
+            data_point = ADCDataPoint(
+                timestamp=timestamp,
+                channel=channel,
+                raw_value=raw_value,
+                voltage=voltage,
+                vref=device.vref
+            )
+            self.adc_logger.log_adc_reading(data_point)
+
             return APIResponse(
                 success=True,
-                timestamp=time.time(),
+                timestamp=timestamp,
                 request_id=request_id,
                 data={
                     'channel': channel,
@@ -319,18 +597,31 @@ class HMIJsonAPI:
         
         elif action == 'read_all_channels':
             channels_data = []
+            timestamp = time.time()
+
             for channel in range(8):
-                raw_value = device.read_channel(channel)
-                voltage = device.read_channel_voltage(channel)
+                # Use averaged reading for stability
+                raw_value = device.read_channel_averaged(channel, samples=3)
+                voltage = (raw_value / 4095.0) * device.vref
                 channels_data.append({
                     'channel': channel,
                     'raw_value': raw_value,
                     'voltage': voltage
                 })
-            
+
+                # Log each channel reading
+                data_point = ADCDataPoint(
+                    timestamp=timestamp,
+                    channel=channel,
+                    raw_value=raw_value,
+                    voltage=voltage,
+                    vref=device.vref
+                )
+                self.adc_logger.log_adc_reading(data_point)
+
             return APIResponse(
                 success=True,
-                timestamp=time.time(),
+                timestamp=timestamp,
                 request_id=request_id,
                 data={
                     'channels': channels_data,
@@ -352,6 +643,93 @@ class HMIJsonAPI:
                 data={'vref': device.vref}
             )
         
+        elif action == 'get_logged_data':
+            # Get parameters
+            channel = params.get('channel')  # None means all channels
+            max_points = params.get('max_points', 100)
+            time_range_seconds = params.get('time_range_seconds')
+
+            # Get data from logger
+            data = self.adc_logger.get_recent_data(
+                channel=channel,
+                max_points=max_points,
+                time_range_seconds=time_range_seconds
+            )
+
+            # Convert to JSON-serializable format
+            result = {}
+            for ch, points in data.items():
+                result[str(ch)] = [
+                    {
+                        'timestamp': dp.timestamp,
+                        'channel': dp.channel,
+                        'raw_value': dp.raw_value,
+                        'voltage': dp.voltage,
+                        'vref': dp.vref
+                    }
+                    for dp in points
+                ]
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={
+                    'logged_data': result,
+                    'logging_stats': self.adc_logger.get_logging_stats()
+                }
+            )
+
+        elif action == 'start_logging':
+            if not self.adc_logger.logging_active:
+                self.adc_logger.start_logging()
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={'logging_active': self.adc_logger.logging_active}
+            )
+
+        elif action == 'stop_logging':
+            if self.adc_logger.logging_active:
+                self.adc_logger.stop_logging()
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={'logging_active': self.adc_logger.logging_active}
+            )
+
+        elif action == 'get_logging_stats':
+            stats = self.adc_logger.get_logging_stats()
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data=stats
+            )
+
+        elif action == 'export_csv':
+            filename = params.get('filename', f"adc_export_{int(time.time())}.csv")
+            channel = params.get('channel')
+            time_range_seconds = params.get('time_range_seconds')
+
+            success = self.adc_logger.export_data_csv(
+                filename=filename,
+                channel=channel,
+                time_range_seconds=time_range_seconds
+            )
+
+            return APIResponse(
+                success=success,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={'filename': filename, 'exported': success}
+            )
+
         else:
             return self._error_response(f"Unknown ADC action: {action}", request_id)
     
@@ -564,17 +942,37 @@ class HMIJsonAPI:
                 }
             )
         
+        elif action == 'get_status':
+            rpm = device.read_fan_rpm()
+            pwm = device.get_pwm_duty_cycle()
+            fan_status = device.get_fan_status()
+
+            # Calculate target RPM based on current PWM (rough approximation)
+            target_rpm = int((pwm / 100.0) * 3000) if pwm else 0
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={
+                    'rpm': rpm or 0,
+                    'target_rpm': target_rpm,
+                    'duty_cycle': pwm or 0,
+                    'failure': False  # Could be enhanced to detect actual failures
+                }
+            )
+
         elif action == 'configure':
             rpm_control = params.get('rpm_control', True)
             poles = params.get('poles', 2)
             edges = params.get('edges', 1)
-            
+
             success = device.configure_fan(
                 enable_rpm_control=bool(rpm_control),
                 poles=int(poles),
                 edges=int(edges)
             )
-            
+
             return APIResponse(
                 success=success,
                 timestamp=time.time(),
@@ -586,7 +984,7 @@ class HMIJsonAPI:
                     'configure_success': success
                 }
             )
-        
+
         else:
             return self._error_response(f"Unknown fan action: {action}", request_id)
     
@@ -704,7 +1102,134 @@ class HMIJsonAPI:
         
         else:
             return self._error_response(f"Unknown EEPROM action: {action}", request_id)
-    
+
+    def _handle_ai_vision_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
+        """Handle AI-Vision system commands"""
+
+        if action == 'get_status':
+            status = device.get_status()
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data=asdict(status)
+            )
+
+        elif action == 'list_cameras':
+            cameras = device.camera_manager.detect_cameras()
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={
+                    'cameras': [asdict(cam) for cam in cameras]
+                }
+            )
+
+        elif action == 'start':
+            camera_id = params.get('camera_id', 0)
+            model_name = params.get('model_name', 'yolo11n.pt')
+
+            # Load model if different
+            current_model = device.inference_engine.model_name
+            if current_model != model_name:
+                if not device.inference_engine.load_model(model_name):
+                    return self._error_response(f"Failed to load model: {model_name}", request_id)
+
+            success = device.start(camera_id)
+
+            return APIResponse(
+                success=success,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={
+                    'active': device.active,
+                    'camera_id': camera_id,
+                    'model_name': model_name
+                }
+            )
+
+        elif action == 'stop':
+            device.stop()
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={'active': device.active}
+            )
+
+        elif action == 'set_confidence':
+            confidence = params.get('confidence', 0.5)
+            if not isinstance(confidence, (int, float)) or not (0.0 <= confidence <= 1.0):
+                return self._error_response("Confidence must be between 0.0 and 1.0", request_id)
+
+            device.inference_engine.set_confidence_threshold(confidence)
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={'confidence_threshold': device.inference_engine.confidence_threshold}
+            )
+
+        elif action == 'get_frame':
+            frame_data = device.get_latest_frame()
+            if frame_data:
+                # Encode frame as base64 for JSON transport
+                frame_b64 = base64.b64encode(frame_data).decode('utf-8')
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={
+                        'frame': frame_b64,
+                        'format': 'jpeg',
+                        'active': device.active
+                    }
+                )
+            else:
+                return APIResponse(
+                    success=False,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    error="No frame available"
+                )
+
+        elif action == 'get_detections':
+            max_count = params.get('max_count', 10)
+            detections = device.get_recent_detections(max_count)
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={
+                    'detections': detections,
+                    'count': len(detections)
+                }
+            )
+
+        elif action == 'get_available_models':
+            # List of common YOLO models
+            models = [
+                'yolo11n.pt',    # Nano - fastest
+                'yolo11s.pt',    # Small
+                'yolo11m.pt',    # Medium
+                'yolo11l.pt',    # Large
+                'yolo11x.pt'     # Extra Large - most accurate
+            ]
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data={'available_models': models}
+            )
+
+        else:
+            return self._error_response(f"Unknown AI-Vision action: {action}", request_id)
+
     def _handle_start_monitoring(self, request_id: str, params: Dict) -> APIResponse:
         """Start continuous monitoring"""
         
@@ -799,8 +1324,9 @@ class HMIJsonAPI:
             if device_id == 'adc':
                 channels = []
                 for ch in range(8):
-                    raw = device.read_channel(ch)
-                    voltage = device.read_channel_voltage(ch)
+                    # Use faster averaging for monitoring (2 samples)
+                    raw = device.read_channel_averaged(ch, samples=2)
+                    voltage = (raw / 4095.0) * device.vref
                     channels.append({
                         'channel': ch,
                         'raw': raw,
@@ -977,6 +1503,26 @@ def create_api_server(host='localhost', port=8080, hmi_api=None):
         status_command = json.dumps({'action': 'get_system_status'})
         response = hmi_api.process_json_command(status_command)
         return jsonify(json.loads(response))
+
+    @app.route('/api/ai_vision/stream')
+    def video_stream():
+        """Video streaming endpoint for AI-Vision"""
+        def generate_frames():
+            while True:
+                if hmi_api.ai_vision and hmi_api.ai_vision.active:
+                    frame_data = hmi_api.ai_vision.get_latest_frame()
+                    if frame_data:
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
+                    else:
+                        time.sleep(0.1)
+                else:
+                    time.sleep(0.5)
+
+        return app.response_class(
+            generate_frames(),
+            mimetype='multipart/x-mixed-replace; boundary=frame'
+        )
     
     print(f"Starting HMI API server on http://{host}:{port}")
     app.run(host=host, port=port, debug=False)
@@ -1079,7 +1625,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         if sys.argv[1] == 'server':
             # Start HTTP API server
-            create_api_server()
+            create_api_server(port=8081)
         elif sys.argv[1] == 'websocket':
             # Start WebSocket server
             create_websocket_server()

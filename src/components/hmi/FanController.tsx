@@ -20,6 +20,7 @@ export function FanController({ apiService }: FanControllerProps) {
   const [rpmValue, setRpmValue] = useState<number>(0);
   const [isUpdating, setIsUpdating] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [rpmHistory, setRpmHistory] = useState<number[]>([]);
 
   const getFanStatus = async () => {
     try {
@@ -34,6 +35,36 @@ export function FanController({ apiService }: FanControllerProps) {
     } catch (error) {
       console.error('Failed to get fan status:', error);
     }
+  };
+
+  // Function to read a single RPM sample for averaging
+  const readRpmSample = async (): Promise<FanStatus | null> => {
+    try {
+      const response = await apiService.getFanStatus();
+      if (response.success && response.data) {
+        return response.data;
+      }
+    } catch (error) {
+      console.error('Failed to read fan sample:', error);
+    }
+    return null;
+  };
+
+  // Function to compute averaged fan status
+  const computeAveragedStatus = (samples: FanStatus[]): FanStatus => {
+    if (samples.length === 0) return { rpm: 0, target_rpm: 0, duty_cycle: 0 };
+
+    const avgRpm = samples.reduce((sum, sample) => sum + sample.rpm, 0) / samples.length;
+    const avgDutyCycle = samples.reduce((sum, sample) => sum + sample.duty_cycle, 0) / samples.length;
+    const lastTargetRpm = samples[samples.length - 1].target_rpm; // Use latest target
+    const hasFailure = samples.some(sample => sample.failure);
+
+    return {
+      rpm: Math.round(avgRpm),
+      target_rpm: lastTargetRpm,
+      duty_cycle: Math.round(avgDutyCycle * 10) / 10, // Round to 1 decimal
+      failure: hasFailure
+    };
   };
 
   const updatePWM = async (newPwm: number) => {
@@ -70,12 +101,44 @@ export function FanController({ apiService }: FanControllerProps) {
 
   useEffect(() => {
     getFanStatus();
-    
+
     if (autoRefresh) {
-      const interval = setInterval(getFanStatus, 2000); // 2 second refresh
-      return () => clearInterval(interval);
+      let sampleInterval: NodeJS.Timeout;
+      let updateInterval: NodeJS.Timeout;
+      const samples: FanStatus[] = [];
+
+      // Collect samples every 500ms (6 samples over 3 seconds)
+      sampleInterval = setInterval(async () => {
+        const sample = await readRpmSample();
+        if (sample) {
+          samples.push(sample);
+          // Keep only the last 6 samples (3 seconds worth)
+          if (samples.length > 6) {
+            samples.shift();
+          }
+          // Update RPM history for display purposes
+          setRpmHistory(samples.map(s => s.rpm));
+        }
+      }, 500);
+
+      // Update display with averaged values every 3 seconds
+      updateInterval = setInterval(() => {
+        if (samples.length > 0) {
+          const averagedStatus = computeAveragedStatus(samples);
+          setFanStatus(averagedStatus);
+          if (!isUpdating) {
+            setPwmValue(averagedStatus.duty_cycle);
+            setRpmValue(averagedStatus.target_rpm);
+          }
+        }
+      }, 3000);
+
+      return () => {
+        clearInterval(sampleInterval);
+        clearInterval(updateInterval);
+      };
     }
-  }, [autoRefresh]);
+  }, [autoRefresh, isUpdating]);
 
   const getFanStatusColor = (): 'normal' | 'warning' | 'error' => {
     if (!fanStatus) return 'normal';

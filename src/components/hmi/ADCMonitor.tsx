@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { HMIDisplay } from '@/components/ui/hmi-display';
 import { Button } from '@/components/ui/button';
 import { HMISlider } from '@/components/ui/hmi-slider';
 import { HMIApiService, ADCReading } from '@/services/hmi-api';
-import { BarChart3, Zap, Settings2 } from 'lucide-react';
+import { ADCChart } from './ADCChart';
+import { BarChart3, Zap, Settings2, TrendingUp } from 'lucide-react';
 
 interface ADCMonitorProps {
   apiService: HMIApiService;
@@ -31,6 +33,53 @@ export function ADCMonitor({ apiService }: ADCMonitorProps) {
     }
   };
 
+  // Function to read a single sample for averaging
+  const readSingleSample = async (): Promise<ADCReading[] | null> => {
+    try {
+      const response = await apiService.readAllADCChannels();
+      if (response.success && response.data) {
+        return response.data.channels;
+      }
+    } catch (error) {
+      console.error('Failed to read sample:', error);
+    }
+    return null;
+  };
+
+  // Function to compute averaged readings from samples
+  const computeAveragedReadings = (samples: ADCReading[][]): ADCReading[] => {
+    if (samples.length === 0) return [];
+
+    const channelCount = 8;
+    const averagedChannels: ADCReading[] = [];
+
+    for (let ch = 0; ch < channelCount; ch++) {
+      let totalRaw = 0;
+      let totalVoltage = 0;
+      let validSamples = 0;
+
+      samples.forEach(sample => {
+        const channelData = sample.find(c => c.channel === ch);
+        if (channelData) {
+          totalRaw += channelData.raw_value;
+          totalVoltage += channelData.voltage;
+          validSamples++;
+        }
+      });
+
+      if (validSamples > 0) {
+        averagedChannels.push({
+          channel: ch,
+          raw_value: Math.round(totalRaw / validSamples),
+          voltage: totalVoltage / validSamples,
+          vref: vref
+        });
+      }
+    }
+
+    return averagedChannels;
+  };
+
   const updateVref = async (newVref: number) => {
     try {
       const response = await apiService.setADCVref(newVref);
@@ -46,12 +95,38 @@ export function ADCMonitor({ apiService }: ADCMonitorProps) {
 
   useEffect(() => {
     readAllChannels();
-    
+
     if (autoRefresh) {
-      const interval = setInterval(readAllChannels, 1000); // 1 second refresh
-      return () => clearInterval(interval);
+      let sampleInterval: NodeJS.Timeout;
+      let updateInterval: NodeJS.Timeout;
+      const samples: ADCReading[][] = [];
+
+      // Collect samples every 500ms (6 samples over 3 seconds)
+      sampleInterval = setInterval(async () => {
+        const sample = await readSingleSample();
+        if (sample) {
+          samples.push(sample);
+          // Keep only the last 6 samples (3 seconds worth)
+          if (samples.length > 6) {
+            samples.shift();
+          }
+        }
+      }, 500);
+
+      // Update display with averaged values every 3 seconds
+      updateInterval = setInterval(() => {
+        if (samples.length > 0) {
+          const averagedChannels = computeAveragedReadings(samples);
+          setChannels(averagedChannels);
+        }
+      }, 3000);
+
+      return () => {
+        clearInterval(sampleInterval);
+        clearInterval(updateInterval);
+      };
     }
-  }, [autoRefresh]);
+  }, [autoRefresh, vref]);
 
   const getVoltageStatus = (voltage: number, vref: number): 'normal' | 'warning' | 'error' => {
     const percentage = (voltage / vref) * 100;
@@ -61,33 +136,46 @@ export function ADCMonitor({ apiService }: ADCMonitorProps) {
   };
 
   return (
-    <Card className="hmi-panel">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-        <CardTitle className="flex items-center gap-2">
-          <BarChart3 className="w-5 h-5 text-primary" />
-          ADC Monitor (ADS7828)
-        </CardTitle>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="hmi"
-            size="sm"
-            onClick={readAllChannels}
-            disabled={isReading}
-          >
-            <Zap className={`w-4 h-4 ${isReading ? 'animate-pulse' : ''}`} />
-            {isReading ? 'Reading...' : 'Read'}
-          </Button>
-          <Button
-            variant={autoRefresh ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setAutoRefresh(!autoRefresh)}
-          >
-            <Settings2 className="w-4 h-4" />
-            Auto
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-6">
+    <Tabs defaultValue="monitor" className="w-full">
+      <TabsList className="grid w-full grid-cols-2">
+        <TabsTrigger value="monitor" className="flex items-center gap-2">
+          <Zap className="w-4 h-4" />
+          Real-time Monitor
+        </TabsTrigger>
+        <TabsTrigger value="chart" className="flex items-center gap-2">
+          <TrendingUp className="w-4 h-4" />
+          Data Chart
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="monitor" className="space-y-4">
+        <Card className="hmi-panel">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-primary" />
+              ADC Monitor (ADS7828)
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="hmi"
+                size="sm"
+                onClick={readAllChannels}
+                disabled={isReading}
+              >
+                <Zap className={`w-4 h-4 ${isReading ? 'animate-pulse' : ''}`} />
+                {isReading ? 'Reading...' : 'Read'}
+              </Button>
+              <Button
+                variant={autoRefresh ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setAutoRefresh(!autoRefresh)}
+              >
+                <Settings2 className="w-4 h-4" />
+                Auto
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6">
         {/* Vref Control */}
         <div className="space-y-4 p-4 bg-secondary/30 rounded-lg">
           <div className="flex items-center justify-between">
@@ -165,7 +253,13 @@ export function ADCMonitor({ apiService }: ADCMonitorProps) {
             unit="V"
           />
         </div>
-      </CardContent>
-    </Card>
+          </CardContent>
+        </Card>
+      </TabsContent>
+
+      <TabsContent value="chart" className="space-y-4">
+        <ADCChart apiService={apiService} />
+      </TabsContent>
+    </Tabs>
   );
 }
