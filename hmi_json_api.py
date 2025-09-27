@@ -16,6 +16,7 @@ import queue
 import traceback
 import os
 import csv
+import sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, asdict
@@ -40,6 +41,33 @@ try:
 except ImportError as e:
     print(f"Warning: AI-Vision system not available: {e}")
     AI_VISION_AVAILABLE = False
+
+# Import CAN interface
+try:
+    from can_interface import get_can_interface, CANInterface, CANBusConfig
+    CAN_AVAILABLE = True
+    print("CAN interface available")
+except ImportError as e:
+    print(f"Warning: CAN interface not available: {e}")
+    CAN_AVAILABLE = False
+
+# Import Automation engine
+try:
+    from automation_engine import get_automation_engine, AutomationEngine, AutomationRequest, Environment, Collection
+    AUTOMATION_AVAILABLE = True
+    print("Automation engine available")
+except ImportError as e:
+    print(f"Warning: Automation engine not available: {e}")
+    AUTOMATION_AVAILABLE = False
+
+# Import DIAG Agent (Log Monitor)
+try:
+    from log_monitor import LogMonitoringAgent, DatabaseManager, LogAnalyzer, ClaudeAnalyzer, AlertManager
+    DIAG_AGENT_AVAILABLE = True
+    print("DIAG Agent (Log Monitor) available")
+except ImportError as e:
+    print(f"Warning: DIAG Agent not available: {e}")
+    DIAG_AGENT_AVAILABLE = False
 
 @dataclass
 class DeviceStatus:
@@ -541,6 +569,12 @@ class HMIJsonAPI:
                 return self._handle_eeprom_command(device, action, params, request_id)
             elif device_id == 'ai_vision':
                 return self._handle_ai_vision_command(device, action, params, request_id)
+            elif device_id == 'can':
+                return self._handle_can_command(device, action, params, request_id)
+            elif device_id == 'automation':
+                return self._handle_automation_command(device, action, params, request_id)
+            elif device_id == 'diag_agent':
+                return self._handle_diag_agent_command(device, action, params, request_id)
             else:
                 return APIResponse(
                     success=False,
@@ -1230,6 +1264,425 @@ class HMIJsonAPI:
         else:
             return self._error_response(f"Unknown AI-Vision action: {action}", request_id)
 
+    def _handle_can_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
+        """Handle CAN interface commands"""
+
+        if not CAN_AVAILABLE:
+            return self._error_response("CAN interface not available", request_id)
+
+        try:
+            can_interface = get_can_interface()
+
+            if action == 'get_status':
+                status = can_interface.get_status()
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=status
+                )
+
+            elif action == 'get_interfaces':
+                interfaces = can_interface.get_available_interfaces()
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'interfaces': interfaces}
+                )
+
+            elif action == 'connect':
+                interface = params.get('interface', 'cantact')
+                channel = params.get('channel', 'can0')
+                bitrate = params.get('bitrate', 250000)
+
+                config = CANBusConfig(
+                    interface=interface,
+                    channel=channel,
+                    bitrate=bitrate
+                )
+
+                success = can_interface.connect(config)
+                return APIResponse(
+                    success=success,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={
+                        'connected': success,
+                        'config': {
+                            'interface': interface,
+                            'channel': channel,
+                            'bitrate': bitrate
+                        }
+                    }
+                )
+
+            elif action == 'disconnect':
+                can_interface.disconnect()
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'connected': False}
+                )
+
+            elif action == 'send_message':
+                arbitration_id = params.get('arbitration_id')
+                data = params.get('data', [])
+                is_extended_id = params.get('is_extended_id', False)
+
+                if arbitration_id is None:
+                    return self._error_response("arbitration_id is required", request_id)
+
+                # Convert hex string to int if needed
+                if isinstance(arbitration_id, str):
+                    arbitration_id = int(arbitration_id, 16) if arbitration_id.startswith('0x') else int(arbitration_id)
+
+                # Convert hex strings in data array to ints
+                data_bytes = []
+                for byte in data:
+                    if isinstance(byte, str):
+                        data_bytes.append(int(byte, 16) if byte.startswith('0x') else int(byte))
+                    else:
+                        data_bytes.append(int(byte))
+
+                success = can_interface.send_message(arbitration_id, data_bytes, is_extended_id)
+                return APIResponse(
+                    success=success,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={
+                        'sent': success,
+                        'arbitration_id': hex(arbitration_id),
+                        'data': [hex(b) for b in data_bytes]
+                    }
+                )
+
+            elif action == 'get_messages':
+                count = params.get('count', 50)
+                messages = can_interface.get_messages(count)
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={
+                        'messages': messages,
+                        'count': len(messages)
+                    }
+                )
+
+            elif action == 'clear_messages':
+                can_interface.clear_messages()
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'cleared': True}
+                )
+
+            elif action == 'cli_command':
+                command = params.get('command', '')
+                result = can_interface.execute_cli_command(command)
+                return APIResponse(
+                    success=result.get('success', False),
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=result
+                )
+
+            else:
+                return self._error_response(f"Unknown CAN action: {action}", request_id)
+
+        except Exception as e:
+            return self._error_response(f"CAN command error: {str(e)}", request_id)
+
+    def _handle_automation_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
+        """Handle Automation engine commands"""
+
+        if not AUTOMATION_AVAILABLE:
+            return self._error_response("Automation engine not available", request_id)
+
+        try:
+            automation_engine = get_automation_engine()
+
+            if action == 'get_status':
+                status = automation_engine.get_status()
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=status
+                )
+
+            elif action == 'create_environment':
+                name = params.get('name', '')
+                variables = params.get('variables', {})
+                base_url = params.get('base_url', '')
+
+                if not name:
+                    return self._error_response("Environment name is required", request_id)
+
+                env = automation_engine.create_environment(name, variables, base_url)
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=env.to_dict()
+                )
+
+            elif action == 'list_environments':
+                environments = [env.to_dict() for env in automation_engine.environments.values()]
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'environments': environments}
+                )
+
+            elif action == 'set_active_environment':
+                env_id = params.get('environment_id')
+                if not env_id:
+                    return self._error_response("environment_id is required", request_id)
+
+                success = automation_engine.set_active_environment(env_id)
+                return APIResponse(
+                    success=success,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'active': success}
+                )
+
+            elif action == 'create_collection':
+                name = params.get('name', '')
+                description = params.get('description', '')
+
+                if not name:
+                    return self._error_response("Collection name is required", request_id)
+
+                collection = automation_engine.create_collection(name, description)
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=collection.to_dict()
+                )
+
+            elif action == 'list_collections':
+                collections = [col.to_dict() for col in automation_engine.collections.values()]
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'collections': collections}
+                )
+
+            elif action == 'add_request':
+                collection_id = params.get('collection_id')
+                request_data = params.get('request', {})
+
+                if not collection_id:
+                    return self._error_response("collection_id is required", request_id)
+
+                # Create automation request
+                auto_request = AutomationRequest(
+                    name=request_data.get('name', ''),
+                    method=request_data.get('method', 'GET'),
+                    url=request_data.get('url', ''),
+                    headers=request_data.get('headers', {}),
+                    body=request_data.get('body'),
+                    body_type=request_data.get('body_type', 'json'),
+                    auth_type=request_data.get('auth_type', 'none'),
+                    auth_config=request_data.get('auth_config', {}),
+                    timeout=request_data.get('timeout', 30.0)
+                )
+
+                success = automation_engine.add_request_to_collection(collection_id, auto_request)
+                return APIResponse(
+                    success=success,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'added': success, 'request_id': auto_request.id}
+                )
+
+            elif action == 'execute_request':
+                request_data = params.get('request', {})
+                environment_id = params.get('environment_id')
+
+                # Create temporary request
+                auto_request = AutomationRequest(
+                    name=request_data.get('name', ''),
+                    method=request_data.get('method', 'GET'),
+                    url=request_data.get('url', ''),
+                    headers=request_data.get('headers', {}),
+                    body=request_data.get('body'),
+                    body_type=request_data.get('body_type', 'json'),
+                    auth_type=request_data.get('auth_type', 'none'),
+                    auth_config=request_data.get('auth_config', {}),
+                    timeout=request_data.get('timeout', 30.0)
+                )
+
+                environment = None
+                if environment_id and environment_id in automation_engine.environments:
+                    environment = automation_engine.environments[environment_id]
+
+                response = automation_engine.execute_request(auto_request, environment)
+                return APIResponse(
+                    success=response.error is None,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=response.to_dict()
+                )
+
+            elif action == 'run_collection':
+                collection_id = params.get('collection_id')
+                environment_id = params.get('environment_id')
+
+                if not collection_id:
+                    return self._error_response("collection_id is required", request_id)
+
+                results = automation_engine.run_collection(collection_id, environment_id)
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={
+                        'results': [result.to_dict() for result in results],
+                        'total': len(results),
+                        'passed': sum(1 for r in results if r.success),
+                        'failed': sum(1 for r in results if not r.success)
+                    }
+                )
+
+            elif action == 'import_collection':
+                collection_data = params.get('collection_data', {})
+                collection = automation_engine.import_insomnia_collection(collection_data)
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=collection.to_dict()
+                )
+
+            elif action == 'clear_results':
+                automation_engine.clear_results()
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'cleared': True}
+                )
+
+            elif action == 'get_collection':
+                collection_id = params.get('collection_id')
+                if not collection_id:
+                    return self._error_response("collection_id is required", request_id)
+
+                if collection_id in automation_engine.collections:
+                    collection = automation_engine.collections[collection_id]
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data=collection.to_dict()
+                    )
+                else:
+                    return self._error_response("Collection not found", request_id)
+
+            # JSON Library Management endpoints
+            elif action == 'upload_json_library':
+                name = params.get('name', '')
+                content = params.get('content', {})
+                library_type = params.get('type', 'schema')
+
+                if not name:
+                    return self._error_response("Library name is required", request_id)
+
+                if not content:
+                    return self._error_response("Library content is required", request_id)
+
+                library = automation_engine.upload_json_library(name, content, library_type)
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=library.to_dict()
+                )
+
+            elif action == 'list_json_libraries':
+                libraries = [lib.to_dict() for lib in automation_engine.json_libraries.values()]
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'libraries': libraries}
+                )
+
+            elif action == 'get_json_library':
+                library_id = params.get('library_id')
+                if not library_id:
+                    return self._error_response("library_id is required", request_id)
+
+                if library_id in automation_engine.json_libraries:
+                    library = automation_engine.json_libraries[library_id]
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data=library.to_dict()
+                    )
+                else:
+                    return self._error_response("JSON library not found", request_id)
+
+            elif action == 'delete_json_library':
+                library_id = params.get('library_id')
+                if not library_id:
+                    return self._error_response("library_id is required", request_id)
+
+                success = automation_engine.delete_json_library(library_id)
+                return APIResponse(
+                    success=success,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'deleted': success}
+                )
+
+            elif action == 'validate_json':
+                schema_id = params.get('schema_id')
+                data = params.get('data', {})
+
+                if not schema_id:
+                    return self._error_response("schema_id is required", request_id)
+
+                result = automation_engine.validate_json_with_schema(schema_id, data)
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=result
+                )
+
+            elif action == 'generate_mock_data':
+                template_id = params.get('template_id')
+                variables = params.get('variables', {})
+
+                if not template_id:
+                    return self._error_response("template_id is required", request_id)
+
+                result = automation_engine.generate_mock_data(template_id, variables)
+                return APIResponse(
+                    success=result is not None,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={'mock_data': result} if result else None,
+                    error="Failed to generate mock data" if result is None else None
+                )
+
+            else:
+                return self._error_response(f"Unknown Automation action: {action}", request_id)
+
+        except Exception as e:
+            return self._error_response(f"Automation command error: {str(e)}", request_id)
+
     def _handle_start_monitoring(self, request_id: str, params: Dict) -> APIResponse:
         """Start continuous monitoring"""
         
@@ -1440,10 +1893,276 @@ class HMIJsonAPI:
                 device.disconnect()
             except Exception as e:
                 print(f"Error disconnecting device: {e}")
-        
+
         self.devices.clear()
         self.device_status.clear()
-    
+
+    def _handle_diag_agent_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
+        """Handle DIAG Agent (Log Monitor) commands"""
+        if not DIAG_AGENT_AVAILABLE:
+            return self._error_response("DIAG Agent not available", request_id)
+
+        try:
+            if action == 'get_status':
+                # Get overall status of the DIAG Agent
+                try:
+                    # Initialize or get existing agent instance
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    # Get database status
+                    db_manager = self._diag_agent.db_manager
+
+                    # Query recent analyses
+                    with sqlite3.connect(db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+
+                        # Get overall health score (average of recent analyses)
+                        cursor.execute("""
+                            SELECT AVG(health_score) FROM analyses
+                            WHERE timestamp > datetime('now', '-24 hours') AND health_score IS NOT NULL
+                        """)
+                        avg_health = cursor.fetchone()[0] or 8
+
+                        # Get monitored files count
+                        monitored_files = len([f for f in self._diag_agent.config['log_files'] if f.get('enabled', True)])
+
+                        # Get total analyses count
+                        cursor.execute("SELECT COUNT(*) FROM analyses")
+                        total_analyses = cursor.fetchone()[0]
+
+                        # Get active alerts count
+                        cursor.execute("SELECT COUNT(*) FROM alerts WHERE resolved = 0")
+                        active_alerts = cursor.fetchone()[0]
+
+                        # Get last analysis timestamp
+                        cursor.execute("SELECT timestamp FROM analyses ORDER BY timestamp DESC LIMIT 1")
+                        last_analysis = cursor.fetchone()
+                        last_analysis = last_analysis[0] if last_analysis else None
+
+                        # Get errors in last 24h
+                        cursor.execute("""
+                            SELECT SUM(error_count) FROM analyses
+                            WHERE timestamp > datetime('now', '-24 hours')
+                        """)
+                        errors_24h = cursor.fetchone()[0] or 0
+
+                        # Get average response time
+                        cursor.execute("""
+                            SELECT AVG(avg_response_time) FROM analyses
+                            WHERE timestamp > datetime('now', '-24 hours') AND avg_response_time > 0
+                        """)
+                        avg_response_time = cursor.fetchone()[0] or 0
+
+                    status_data = {
+                        'service_running': True,  # If we got here, service is running
+                        'overall_health_score': round(avg_health, 1),
+                        'monitored_files': monitored_files,
+                        'total_analyses': total_analyses,
+                        'active_alerts': active_alerts,
+                        'last_analysis': last_analysis,
+                        'errors_24h': int(errors_24h),
+                        'avg_response_time': round(avg_response_time, 2) if avg_response_time else 0,
+                        'api_calls_today': 0,  # TODO: Track API calls
+                        'next_scheduled_analysis': None  # TODO: Get from scheduler
+                    }
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data=status_data
+                    )
+
+                except Exception as e:
+                    return self._error_response(f"Failed to get DIAG Agent status: {str(e)}", request_id)
+
+            elif action == 'get_analyses':
+                limit = params.get('limit', 50)
+
+                try:
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    db_manager = self._diag_agent.db_manager
+
+                    with sqlite3.connect(db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            SELECT id, timestamp, log_file, health_score, error_count, warning_count,
+                                   avg_response_time, ai_triggered, analysis_text
+                            FROM analyses
+                            ORDER BY timestamp DESC
+                            LIMIT ?
+                        """, (limit,))
+
+                        analyses = []
+                        for row in cursor.fetchall():
+                            analysis_data = None
+                            summary = None
+
+                            if row[8]:  # analysis_text
+                                try:
+                                    analysis_json = json.loads(row[8])
+                                    analysis_data = analysis_json
+                                    summary = analysis_json.get('summary', 'No summary available')
+                                except:
+                                    summary = "Analysis data parsing error"
+
+                            analyses.append({
+                                'id': str(row[0]),
+                                'timestamp': row[1],
+                                'log_file': row[2],
+                                'health_score': row[3] or 5,
+                                'error_count': row[4] or 0,
+                                'warning_count': row[5] or 0,
+                                'avg_response_time': row[6] or 0,
+                                'ai_triggered': bool(row[7]),
+                                'summary': summary,
+                                'analysis_data': analysis_data
+                            })
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data=analyses
+                    )
+
+                except Exception as e:
+                    return self._error_response(f"Failed to get analyses: {str(e)}", request_id)
+
+            elif action == 'get_alerts':
+                resolved = params.get('resolved', False)
+
+                try:
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    db_manager = self._diag_agent.db_manager
+
+                    with sqlite3.connect(db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            SELECT id, timestamp, alert_type, severity, message, log_file, health_score, resolved
+                            FROM alerts
+                            WHERE resolved = ?
+                            ORDER BY timestamp DESC
+                        """, (1 if resolved else 0,))
+
+                        alerts = []
+                        for row in cursor.fetchall():
+                            alerts.append({
+                                'id': str(row[0]),
+                                'timestamp': row[1],
+                                'alert_type': row[2],
+                                'severity': row[3],
+                                'message': row[4],
+                                'log_file': row[5],
+                                'health_score': row[6],
+                                'resolved': bool(row[7])
+                            })
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data=alerts
+                    )
+
+                except Exception as e:
+                    return self._error_response(f"Failed to get alerts: {str(e)}", request_id)
+
+            elif action == 'get_config':
+                try:
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    config = self._diag_agent.config.copy()
+
+                    # Mask sensitive data
+                    if 'claude' in config and 'api_key' in config['claude']:
+                        config['claude']['api_key'] = '***masked***'
+
+                    # Transform to match frontend interface
+                    config_data = {
+                        'claude_api_key': '***masked***',
+                        'check_interval': config.get('monitoring', {}).get('check_interval_minutes', 15),
+                        'error_threshold': config.get('analysis_thresholds', {}).get('error_count', 10),
+                        'response_time_threshold': config.get('analysis_thresholds', {}).get('avg_response_time', 2000),
+                        'high_activity_threshold': config.get('analysis_thresholds', {}).get('high_activity', 1000),
+                        'email_enabled': config.get('email', {}).get('enabled', False),
+                        'log_files': config.get('log_files', []),
+                        'alert_thresholds': config.get('alert_thresholds', {})
+                    }
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data=config_data
+                    )
+
+                except Exception as e:
+                    return self._error_response(f"Failed to get config: {str(e)}", request_id)
+
+            elif action == 'start_analysis':
+                try:
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    # Run a single analysis cycle
+                    results = self._diag_agent.run_analysis_cycle()
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data={
+                            'message': f'Analysis completed for {len(results)} log files',
+                            'results': len(results)
+                        }
+                    )
+
+                except Exception as e:
+                    return self._error_response(f"Failed to start analysis: {str(e)}", request_id)
+
+            elif action == 'send_test_alert':
+                try:
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    # Create a test analysis result
+                    test_analysis = {
+                        'health_score': 8,
+                        'summary': 'Test alert from DIAG Agent HMI interface',
+                        'critical_issues': [],
+                        'recommendations': {'info': ['This is a test alert to verify email functionality']},
+                        'trend_analysis': 'Test alert - all systems normal'
+                    }
+                    test_metrics = {'error_count': 0, 'avg_response_time': 150.0, 'total_lines': 100}
+
+                    self._diag_agent.alert_manager.send_alert(
+                        'test_alert', 'INFO', 'Test alert from HMI interface',
+                        test_analysis, test_metrics, 'hmi_interface'
+                    )
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data={'message': 'Test alert sent successfully'}
+                    )
+
+                except Exception as e:
+                    return self._error_response(f"Failed to send test alert: {str(e)}", request_id)
+
+            else:
+                return self._error_response(f"Unknown DIAG Agent action: {action}", request_id)
+
+        except Exception as e:
+            return self._error_response(f"DIAG Agent command failed: {str(e)}", request_id)
+
     def _error_response(self, message: str, request_id: str = None) -> APIResponse:
         """Create error response"""
         return APIResponse(

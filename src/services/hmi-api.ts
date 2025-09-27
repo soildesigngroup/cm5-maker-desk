@@ -95,6 +95,200 @@ export interface DetectionResult {
   fps: number;
 }
 
+export interface CANMessage {
+  arbitration_id: string;
+  data: string[];
+  timestamp: number;
+  is_extended_id: boolean;
+  is_remote_frame: boolean;
+  dlc: number;
+  formatted_time: string;
+}
+
+export interface CANBusConfig {
+  interface: string;
+  channel: string;
+  bitrate: number;
+  receive_own_messages?: boolean;
+}
+
+export interface CANStatus {
+  connected: boolean;
+  config: CANBusConfig | null;
+  message_count: number;
+  queue_size: number;
+  available_interfaces: string[];
+}
+
+export interface AutomationRequest {
+  id?: string;
+  name: string;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: string;
+  body_type: string;
+  auth_type: string;
+  auth_config: Record<string, string>;
+  timeout: number;
+}
+
+export interface AutomationResponse {
+  status_code: number;
+  headers: Record<string, string>;
+  body: string;
+  content_type: string;
+  size: number;
+  elapsed_time: number;
+  timestamp: number;
+  cookies: Record<string, string>;
+  error?: string;
+}
+
+export interface Environment {
+  id: string;
+  name: string;
+  variables: Record<string, string>;
+  base_url: string;
+  active: boolean;
+}
+
+export interface Collection {
+  id: string;
+  name: string;
+  description: string;
+  requests: AutomationRequest[];
+  environment_id?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TestResult {
+  request_id: string;
+  collection_id: string;
+  success: boolean;
+  response?: AutomationResponse;
+  error?: string;
+  assertions: any[];
+  execution_time: number;
+  timestamp: number;
+}
+
+export interface AutomationStatus {
+  environments: number;
+  collections: number;
+  active_environment?: string;
+  total_requests: number;
+  test_results: number;
+  recent_results: TestResult[];
+}
+
+export interface JsonLibrary {
+  id: string;
+  name: string;
+  content: Record<string, any>;
+  library_type: 'schema' | 'template' | 'collection' | 'mock_data';
+  description?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+// DIAG Agent Interfaces
+export interface DiagAgentStatus {
+  service_running: boolean;
+  overall_health_score: number;
+  monitored_files: number;
+  total_analyses: number;
+  active_alerts: number;
+  last_analysis: string | null;
+  errors_24h: number;
+  avg_response_time: number;
+  api_calls_today: number;
+  next_scheduled_analysis: string | null;
+}
+
+export interface LogAnalysis {
+  id: string;
+  timestamp: string;
+  log_file: string;
+  health_score: number;
+  error_count: number;
+  warning_count: number;
+  avg_response_time: number;
+  ai_triggered: boolean;
+  summary?: string;
+  analysis_data?: {
+    critical_issues: string[];
+    performance_insights: {
+      response_time_analysis: string;
+      bottlenecks: string[];
+      recommendations: string[];
+    };
+    error_analysis: {
+      patterns: string[];
+      root_causes: string[];
+      frequency: string;
+    };
+    recommendations: {
+      high_priority: string[];
+      medium_priority: string[];
+      low_priority: string[];
+    };
+    trend_analysis: string;
+  };
+}
+
+export interface AlertRecord {
+  id: string;
+  timestamp: string;
+  alert_type: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  message: string;
+  log_file?: string;
+  health_score?: number;
+  resolved: boolean;
+  resolution_timestamp?: string;
+  resolution_notes?: string;
+}
+
+export interface DiagConfig {
+  claude_api_key: string;
+  check_interval: number;
+  error_threshold: number;
+  response_time_threshold: number;
+  high_activity_threshold: number;
+  email_enabled: boolean;
+  email_smtp_server?: string;
+  email_smtp_port?: number;
+  email_username?: string;
+  email_password?: string;
+  email_from?: string;
+  email_to?: string;
+  log_files: Array<{
+    path: string;
+    name: string;
+    enabled: boolean;
+  }>;
+  alert_thresholds: {
+    health_score: number;
+    error_count: number;
+    response_time: number;
+  };
+}
+
+export interface ChatMessage {
+  id: string;
+  timestamp: string;
+  message: string;
+  response: string;
+  role: 'user' | 'assistant';
+  context?: {
+    system_status?: any;
+    recent_analyses?: LogAnalysis[];
+    active_alerts?: AlertRecord[];
+  };
+}
+
 export class HMIApiService {
   private baseUrl: string;
   private ws: WebSocket | null = null;
@@ -471,6 +665,351 @@ export class HMIApiService {
     if (callback) {
       callback(data);
     }
+  }
+
+  // CAN Commands
+  async getCANStatus(): Promise<APIResponse<CANStatus>> {
+    return this.sendCommand({
+      action: 'get_status',
+      device: 'can',
+      request_id: `can_status_${Date.now()}`,
+    });
+  }
+
+  async getCANInterfaces(): Promise<APIResponse<{ interfaces: string[] }>> {
+    return this.sendCommand({
+      action: 'get_interfaces',
+      device: 'can',
+      request_id: `can_interfaces_${Date.now()}`,
+    });
+  }
+
+  async connectCAN(config: CANBusConfig): Promise<APIResponse<{ connected: boolean; config: CANBusConfig }>> {
+    return this.sendCommand({
+      action: 'connect',
+      device: 'can',
+      params: config,
+      request_id: `can_connect_${Date.now()}`,
+    });
+  }
+
+  async disconnectCAN(): Promise<APIResponse<{ connected: boolean }>> {
+    return this.sendCommand({
+      action: 'disconnect',
+      device: 'can',
+      request_id: `can_disconnect_${Date.now()}`,
+    });
+  }
+
+  async sendCANMessage(arbitrationId: string, data: string[], isExtendedId: boolean = false): Promise<APIResponse<{ sent: boolean; arbitration_id: string; data: string[] }>> {
+    return this.sendCommand({
+      action: 'send_message',
+      device: 'can',
+      params: {
+        arbitration_id: arbitrationId,
+        data,
+        is_extended_id: isExtendedId,
+      },
+      request_id: `can_send_${Date.now()}`,
+    });
+  }
+
+  async getCANMessages(count: number = 50): Promise<APIResponse<{ messages: CANMessage[]; count: number }>> {
+    return this.sendCommand({
+      action: 'get_messages',
+      device: 'can',
+      params: { count },
+      request_id: `can_messages_${Date.now()}`,
+    });
+  }
+
+  async clearCANMessages(): Promise<APIResponse<{ cleared: boolean }>> {
+    return this.sendCommand({
+      action: 'clear_messages',
+      device: 'can',
+      request_id: `can_clear_${Date.now()}`,
+    });
+  }
+
+  async executeCANCommand(command: string): Promise<APIResponse<any>> {
+    return this.sendCommand({
+      action: 'cli_command',
+      device: 'can',
+      params: { command },
+      request_id: `can_cli_${Date.now()}`,
+    });
+  }
+
+  // Automation Commands
+  async getAutomationStatus(): Promise<APIResponse<AutomationStatus>> {
+    return this.sendCommand({
+      action: 'get_status',
+      device: 'automation',
+      request_id: `automation_status_${Date.now()}`,
+    });
+  }
+
+  async createEnvironment(name: string, variables: Record<string, string> = {}, baseUrl: string = ''): Promise<APIResponse<Environment>> {
+    return this.sendCommand({
+      action: 'create_environment',
+      device: 'automation',
+      params: { name, variables, base_url: baseUrl },
+      request_id: `automation_env_create_${Date.now()}`,
+    });
+  }
+
+  async listEnvironments(): Promise<APIResponse<{ environments: Environment[] }>> {
+    return this.sendCommand({
+      action: 'list_environments',
+      device: 'automation',
+      request_id: `automation_env_list_${Date.now()}`,
+    });
+  }
+
+  async setActiveEnvironment(environmentId: string): Promise<APIResponse<{ active: boolean }>> {
+    return this.sendCommand({
+      action: 'set_active_environment',
+      device: 'automation',
+      params: { environment_id: environmentId },
+      request_id: `automation_env_active_${Date.now()}`,
+    });
+  }
+
+  async createCollection(name: string, description: string = ''): Promise<APIResponse<Collection>> {
+    return this.sendCommand({
+      action: 'create_collection',
+      device: 'automation',
+      params: { name, description },
+      request_id: `automation_collection_create_${Date.now()}`,
+    });
+  }
+
+  async listCollections(): Promise<APIResponse<{ collections: Collection[] }>> {
+    return this.sendCommand({
+      action: 'list_collections',
+      device: 'automation',
+      request_id: `automation_collection_list_${Date.now()}`,
+    });
+  }
+
+  async getCollection(collectionId: string): Promise<APIResponse<Collection>> {
+    return this.sendCommand({
+      action: 'get_collection',
+      device: 'automation',
+      params: { collection_id: collectionId },
+      request_id: `automation_collection_get_${Date.now()}`,
+    });
+  }
+
+  async addRequestToCollection(collectionId: string, request: AutomationRequest): Promise<APIResponse<{ added: boolean; request_id: string }>> {
+    return this.sendCommand({
+      action: 'add_request',
+      device: 'automation',
+      params: { collection_id: collectionId, request },
+      request_id: `automation_request_add_${Date.now()}`,
+    });
+  }
+
+  async executeRequest(request: AutomationRequest, environmentId?: string): Promise<APIResponse<AutomationResponse>> {
+    return this.sendCommand({
+      action: 'execute_request',
+      device: 'automation',
+      params: { request, environment_id: environmentId },
+      request_id: `automation_request_execute_${Date.now()}`,
+    });
+  }
+
+  async runCollection(collectionId: string, environmentId?: string): Promise<APIResponse<{ results: TestResult[]; total: number; passed: number; failed: number }>> {
+    return this.sendCommand({
+      action: 'run_collection',
+      device: 'automation',
+      params: { collection_id: collectionId, environment_id: environmentId },
+      request_id: `automation_collection_run_${Date.now()}`,
+    });
+  }
+
+  async importCollection(collectionData: any): Promise<APIResponse<Collection>> {
+    return this.sendCommand({
+      action: 'import_collection',
+      device: 'automation',
+      params: { collection_data: collectionData },
+      request_id: `automation_collection_import_${Date.now()}`,
+    });
+  }
+
+  async clearAutomationResults(): Promise<APIResponse<{ cleared: boolean }>> {
+    return this.sendCommand({
+      action: 'clear_results',
+      device: 'automation',
+      request_id: `automation_clear_${Date.now()}`,
+    });
+  }
+
+  // JSON Library Commands
+  async uploadJsonLibrary(name: string, content: Record<string, any>, libraryType: string = 'schema'): Promise<APIResponse<JsonLibrary>> {
+    return this.sendCommand({
+      action: 'upload_json_library',
+      device: 'automation',
+      params: { name, content, type: libraryType },
+      request_id: `json_library_upload_${Date.now()}`,
+    });
+  }
+
+  async listJsonLibraries(): Promise<APIResponse<{ libraries: JsonLibrary[] }>> {
+    return this.sendCommand({
+      action: 'list_json_libraries',
+      device: 'automation',
+      request_id: `json_library_list_${Date.now()}`,
+    });
+  }
+
+  async getJsonLibrary(libraryId: string): Promise<APIResponse<JsonLibrary>> {
+    return this.sendCommand({
+      action: 'get_json_library',
+      device: 'automation',
+      params: { library_id: libraryId },
+      request_id: `json_library_get_${Date.now()}`,
+    });
+  }
+
+  async deleteJsonLibrary(libraryId: string): Promise<APIResponse<{ deleted: boolean }>> {
+    return this.sendCommand({
+      action: 'delete_json_library',
+      device: 'automation',
+      params: { library_id: libraryId },
+      request_id: `json_library_delete_${Date.now()}`,
+    });
+  }
+
+  async validateJson(schemaId: string, data: Record<string, any>): Promise<APIResponse<{ valid: boolean; errors?: string[] }>> {
+    return this.sendCommand({
+      action: 'validate_json',
+      device: 'automation',
+      params: { schema_id: schemaId, data },
+      request_id: `json_validate_${Date.now()}`,
+    });
+  }
+
+  async generateMockData(templateId: string, variables: Record<string, any> = {}): Promise<APIResponse<{ mock_data: any }>> {
+    return this.sendCommand({
+      action: 'generate_mock_data',
+      device: 'automation',
+      params: { template_id: templateId, variables },
+      request_id: `json_mock_${Date.now()}`,
+    });
+  }
+
+  // DIAG Agent Commands
+  async getDiagAgentStatus(): Promise<APIResponse<DiagAgentStatus>> {
+    return this.sendCommand<DiagAgentStatus>({
+      action: 'get_status',
+      device: 'diag_agent',
+      request_id: `diag_status_${Date.now()}`,
+    });
+  }
+
+  async getDiagAnalyses(limit: number = 50): Promise<APIResponse<LogAnalysis[]>> {
+    return this.sendCommand<LogAnalysis[]>({
+      action: 'get_analyses',
+      device: 'diag_agent',
+      params: { limit },
+      request_id: `diag_analyses_${Date.now()}`,
+    });
+  }
+
+  async getDiagAlerts(resolved: boolean = false): Promise<APIResponse<AlertRecord[]>> {
+    return this.sendCommand<AlertRecord[]>({
+      action: 'get_alerts',
+      device: 'diag_agent',
+      params: { resolved },
+      request_id: `diag_alerts_${Date.now()}`,
+    });
+  }
+
+  async getDiagConfig(): Promise<APIResponse<DiagConfig>> {
+    return this.sendCommand<DiagConfig>({
+      action: 'get_config',
+      device: 'diag_agent',
+      request_id: `diag_config_${Date.now()}`,
+    });
+  }
+
+  async updateDiagConfig(config: Partial<DiagConfig>): Promise<APIResponse<{ success: boolean }>> {
+    return this.sendCommand({
+      action: 'update_config',
+      device: 'diag_agent',
+      params: config,
+      request_id: `diag_config_update_${Date.now()}`,
+    });
+  }
+
+  async startDiagAnalysis(): Promise<APIResponse<{ message: string }>> {
+    return this.sendCommand({
+      action: 'start_analysis',
+      device: 'diag_agent',
+      request_id: `diag_analysis_${Date.now()}`,
+    });
+  }
+
+  async sendDiagTestAlert(): Promise<APIResponse<{ message: string }>> {
+    return this.sendCommand({
+      action: 'send_test_alert',
+      device: 'diag_agent',
+      request_id: `diag_test_alert_${Date.now()}`,
+    });
+  }
+
+  async getDiagInsights(hours: number = 24): Promise<APIResponse<{
+    health_trend: Array<{ timestamp: string; score: number }>;
+    error_patterns: Array<{ pattern: string; count: number }>;
+    performance_metrics: {
+      avg_response_time: number;
+      peak_response_time: number;
+      error_rate: number;
+    };
+    recommendations: string[];
+  }>> {
+    return this.sendCommand({
+      action: 'get_insights',
+      device: 'diag_agent',
+      params: { hours },
+      request_id: `diag_insights_${Date.now()}`,
+    });
+  }
+
+  async resolveDiagAlert(alertId: string, notes?: string): Promise<APIResponse<{ success: boolean }>> {
+    return this.sendCommand({
+      action: 'resolve_alert',
+      device: 'diag_agent',
+      params: { alert_id: alertId, notes },
+      request_id: `diag_resolve_${Date.now()}`,
+    });
+  }
+
+  async sendDiagChatMessage(message: string): Promise<APIResponse<ChatMessage>> {
+    return this.sendCommand<ChatMessage>({
+      action: 'send_chat_message',
+      device: 'diag_agent',
+      params: { message },
+      request_id: `diag_chat_${Date.now()}`,
+    });
+  }
+
+  async getDiagChatHistory(limit: number = 50): Promise<APIResponse<ChatMessage[]>> {
+    return this.sendCommand<ChatMessage[]>({
+      action: 'get_chat_history',
+      device: 'diag_agent',
+      params: { limit },
+      request_id: `diag_chat_history_${Date.now()}`,
+    });
+  }
+
+  async clearDiagChatHistory(): Promise<APIResponse<{ success: boolean }>> {
+    return this.sendCommand({
+      action: 'clear_chat_history',
+      device: 'diag_agent',
+      request_id: `diag_chat_clear_${Date.now()}`,
+    });
   }
 
   // Connection Test

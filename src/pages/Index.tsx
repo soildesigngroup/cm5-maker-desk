@@ -7,9 +7,12 @@ import { FanController } from '@/components/hmi/FanController';
 import { RTCDisplay } from '@/components/hmi/RTCDisplay';
 import { ConnectionSettings } from '@/components/hmi/ConnectionSettings';
 import { AIVision } from '@/components/hmi/AIVision';
+import { CAN } from '@/components/hmi/CAN';
+import { Automation } from '@/components/hmi/Automation';
+import { DiagAgent } from '@/components/hmi/DiagAgent';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Cpu, BarChart3, ToggleLeft, Fan, Clock, Settings, Menu, Eye } from 'lucide-react';
+import { Cpu, BarChart3, ToggleLeft, Fan, Clock, Settings, Menu, Eye, Radio, Zap, Stethoscope } from 'lucide-react';
 
 const Index = () => {
   const [apiService, setApiService] = useState(new HMIApiService());
@@ -56,7 +59,7 @@ const Index = () => {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-7 lg:w-auto lg:grid-cols-7">
+          <TabsList className="grid w-full grid-cols-10 lg:w-auto lg:grid-cols-10">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <Menu className="w-4 h-4" />
               <span className="hidden sm:inline">Overview</span>
@@ -77,9 +80,21 @@ const Index = () => {
               <Clock className="w-4 h-4" />
               <span className="hidden sm:inline">RTC</span>
             </TabsTrigger>
+            <TabsTrigger value="can" className="flex items-center gap-2">
+              <Radio className="w-4 h-4" />
+              <span className="hidden sm:inline">CAN</span>
+            </TabsTrigger>
             <TabsTrigger value="ai_vision" className="flex items-center gap-2">
               <Eye className="w-4 h-4" />
               <span className="hidden sm:inline">AI-Vision</span>
+            </TabsTrigger>
+            <TabsTrigger value="automation" className="flex items-center gap-2">
+              <Zap className="w-4 h-4" />
+              <span className="hidden sm:inline">Automation</span>
+            </TabsTrigger>
+            <TabsTrigger value="diag_agent" className="flex items-center gap-2">
+              <Stethoscope className="w-4 h-4" />
+              <span className="hidden sm:inline">DIAG Agent</span>
             </TabsTrigger>
             <TabsTrigger value="settings" className="flex items-center gap-2">
               <Settings className="w-4 h-4" />
@@ -113,8 +128,20 @@ const Index = () => {
             <RTCDisplay apiService={apiService} />
           </TabsContent>
 
+          <TabsContent value="can" className="animate-fade-in">
+            <CAN apiService={apiService} />
+          </TabsContent>
+
           <TabsContent value="ai_vision" className="animate-fade-in">
             <AIVision apiService={apiService} />
+          </TabsContent>
+
+          <TabsContent value="automation" className="animate-fade-in">
+            <Automation apiService={apiService} />
+          </TabsContent>
+
+          <TabsContent value="diag_agent" className="animate-fade-in">
+            <DiagAgent apiService={apiService} />
           </TabsContent>
 
           <TabsContent value="settings" className="animate-fade-in">
