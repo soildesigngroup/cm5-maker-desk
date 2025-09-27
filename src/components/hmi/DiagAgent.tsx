@@ -433,6 +433,15 @@ export function DiagAgent({ apiService }: DiagAgentProps) {
                         {status.api_calls_today}
                       </span>
                     </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium">AI Agent Status</span>
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${status.ai_online ? 'bg-green-500' : 'bg-red-500'}`} />
+                        <span className={`text-sm font-medium ${status.ai_online ? 'text-green-600' : 'text-red-600'}`}>
+                          {status.ai_online ? 'Online' : 'Offline'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div className="text-center text-muted-foreground py-8">
@@ -679,11 +688,24 @@ export function DiagAgent({ apiService }: DiagAgentProps) {
               <CardTitle className="flex items-center gap-2">
                 <MessageSquare className="w-5 h-5 text-primary" />
                 Chat with AI Agent
+                {status && (
+                  <div className="flex items-center gap-2 ml-auto">
+                    <div className={`w-2 h-2 rounded-full ${status.ai_online ? 'bg-green-500' : 'bg-red-500'}`} />
+                    <span className={`text-sm font-medium ${status.ai_online ? 'text-green-600' : 'text-red-600'}`}>
+                      {status.ai_online ? 'AI Online' : 'AI Offline'}
+                    </span>
+                  </div>
+                )}
               </CardTitle>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={handleClearChat}>
                   Clear History
                 </Button>
+                {status && !status.ai_online && (
+                  <div className="text-xs text-muted-foreground ml-2">
+                    {status.ai_status_message}
+                  </div>
+                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -734,16 +756,16 @@ export function DiagAgent({ apiService }: DiagAgentProps) {
                 {/* Message Input */}
                 <div className="flex gap-2">
                   <Textarea
-                    placeholder="Ask about system issues, log analysis, or request recommendations..."
+                    placeholder={status?.ai_online ? "Ask about system issues, log analysis, or request recommendations..." : "AI Agent is offline. Please check API configuration."}
                     value={chatMessage}
                     onChange={(e) => setChatMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
                     className="flex-1 min-h-[80px] resize-none"
-                    disabled={isSendingMessage}
+                    disabled={isSendingMessage || !status?.ai_online}
                   />
                   <Button
                     onClick={handleSendMessage}
-                    disabled={!chatMessage.trim() || isSendingMessage}
+                    disabled={!chatMessage.trim() || isSendingMessage || !status?.ai_online}
                     className="self-end"
                   >
                     {isSendingMessage ? (

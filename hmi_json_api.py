@@ -17,6 +17,8 @@ import traceback
 import os
 import csv
 import sqlite3
+import subprocess
+import signal
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, asdict
@@ -107,6 +109,77 @@ class LoggingConfig:
     file_rotation_hours: int = 24
     log_directory: str = "logs"
     channels: List[int] = None  # None means all channels
+
+class GPIOStatusController:
+    """Controls GPIO pin to indicate app status"""
+
+    def __init__(self, gpio_pin: int = 16):
+        self.gpio_pin = gpio_pin
+        self.is_running = False
+        self.blink_thread = None
+        self._stop_event = threading.Event()
+
+    def start_status_blink(self):
+        """Start blinking GPIO to indicate app is active"""
+        if self.is_running:
+            return
+
+        self.is_running = True
+        self._stop_event.clear()
+        self.blink_thread = threading.Thread(target=self._blink_loop, daemon=True)
+        self.blink_thread.start()
+        print(f"Started GPIO {self.gpio_pin} status blinking")
+
+    def stop_status_blink(self):
+        """Stop blinking and set GPIO low"""
+        if not self.is_running:
+            return
+
+        self.is_running = False
+        self._stop_event.set()
+
+        if self.blink_thread:
+            self.blink_thread.join(timeout=3.0)
+
+        # Ensure GPIO is set low when stopped
+        self._set_gpio_low()
+        print(f"Stopped GPIO {self.gpio_pin} status blinking")
+
+    def _blink_loop(self):
+        """Main blinking loop"""
+        while not self._stop_event.is_set():
+            try:
+                # Set high
+                self._set_gpio_high()
+                if self._stop_event.wait(1.0):  # Wait 1 second or until stop event
+                    break
+
+                # Set low
+                self._set_gpio_low()
+                if self._stop_event.wait(1.0):  # Wait 1 second or until stop event
+                    break
+
+            except Exception as e:
+                print(f"Error in GPIO blink loop: {e}")
+                time.sleep(1.0)
+
+    def _set_gpio_high(self):
+        """Set GPIO pin high using pinctrl"""
+        try:
+            subprocess.run(['pinctrl', 'set', str(self.gpio_pin), 'op', 'dh'],
+                         check=True, capture_output=True, timeout=5)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+            # Silently ignore GPIO errors to prevent app crashes
+            pass
+
+    def _set_gpio_low(self):
+        """Set GPIO pin low using pinctrl"""
+        try:
+            subprocess.run(['pinctrl', 'set', str(self.gpio_pin), 'op', 'dl'],
+                         check=True, capture_output=True, timeout=5)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+            # Silently ignore GPIO errors to prevent app crashes
+            pass
 
 class ADCDataLogger:
     """
@@ -347,6 +420,9 @@ class HMIJsonAPI:
             log_directory="adc_logs"
         )
         self.adc_logger = ADCDataLogger(logging_config)
+
+        # GPIO Status Controller
+        self.gpio_controller = GPIOStatusController(gpio_pin=16)
 
         # Initialize devices if requested
         if auto_connect:
@@ -1897,6 +1973,10 @@ class HMIJsonAPI:
         self.devices.clear()
         self.device_status.clear()
 
+        # Stop GPIO status indicator
+        if hasattr(self, 'gpio_controller'):
+            self.gpio_controller.stop_status_blink()
+
     def _handle_diag_agent_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
         """Handle DIAG Agent (Log Monitor) commands"""
         if not DIAG_AGENT_AVAILABLE:
@@ -1954,6 +2034,26 @@ class HMIJsonAPI:
                         """)
                         avg_response_time = cursor.fetchone()[0] or 0
 
+                    # Check AI agent status
+                    ai_online = False
+                    ai_status_message = "API key not configured"
+
+                    try:
+                        # Quick API key validation
+                        if 'claude' in self._diag_agent.config and 'api_key' in self._diag_agent.config['claude']:
+                            api_key = self._diag_agent.config['claude']['api_key']
+                            if api_key and api_key != "your-api-key-here" and len(api_key) > 10:
+                                # Test Claude API connection (quick test)
+                                claude_analyzer = ClaudeAnalyzer(self._diag_agent.config)
+                                test_response = claude_analyzer.analyze_logs("test", {'error_count': 0}, 'status_check')
+                                ai_online = test_response is not None and 'error' not in str(test_response).lower()
+                                ai_status_message = "Claude AI is online and accessible" if ai_online else "Claude API connection failed"
+                            else:
+                                ai_status_message = "API key not configured or invalid"
+                    except Exception as e:
+                        ai_online = False
+                        ai_status_message = f"AI status check failed: {str(e)}"
+
                     status_data = {
                         'service_running': True,  # If we got here, service is running
                         'overall_health_score': round(avg_health, 1),
@@ -1964,7 +2064,9 @@ class HMIJsonAPI:
                         'errors_24h': int(errors_24h),
                         'avg_response_time': round(avg_response_time, 2) if avg_response_time else 0,
                         'api_calls_today': 0,  # TODO: Track API calls
-                        'next_scheduled_analysis': None  # TODO: Get from scheduler
+                        'next_scheduled_analysis': None,  # TODO: Get from scheduler
+                        'ai_online': ai_online,
+                        'ai_status_message': ai_status_message
                     }
 
                     return APIResponse(
@@ -2157,6 +2259,225 @@ class HMIJsonAPI:
                 except Exception as e:
                     return self._error_response(f"Failed to send test alert: {str(e)}", request_id)
 
+            elif action == 'validate_api_key':
+                try:
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    # Test Claude API connection
+                    claude_analyzer = ClaudeAnalyzer(self._diag_agent.config)
+
+                    # Simple test to validate API key
+                    test_content = "Test log entry for API validation"
+                    test_response = claude_analyzer.analyze_logs(test_content, {'error_count': 0}, 'test_validation')
+
+                    ai_online = test_response is not None and 'error' not in str(test_response).lower()
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data={
+                            'ai_online': ai_online,
+                            'api_key_valid': ai_online,
+                            'message': 'API key is valid and Claude is accessible' if ai_online else 'API key invalid or Claude inaccessible'
+                        }
+                    )
+
+                except Exception as e:
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data={
+                            'ai_online': False,
+                            'api_key_valid': False,
+                            'message': f'API validation failed: {str(e)}'
+                        }
+                    )
+
+            elif action == 'send_chat_message':
+                try:
+                    message = params.get('message', '')
+                    if not message.strip():
+                        return self._error_response("Chat message cannot be empty", request_id)
+
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    # Get system context for AI
+                    db_manager = self._diag_agent.db_manager
+                    context = {}
+
+                    with sqlite3.connect(db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+
+                        # Get recent analyses for context
+                        cursor.execute("""
+                            SELECT * FROM analyses
+                            ORDER BY timestamp DESC
+                            LIMIT 5
+                        """)
+                        context['recent_analyses'] = [dict(row) for row in cursor.fetchall()]
+
+                        # Get active alerts
+                        cursor.execute("""
+                            SELECT * FROM alerts
+                            WHERE resolved = 0
+                            ORDER BY timestamp DESC
+                        """)
+                        context['active_alerts'] = [dict(row) for row in cursor.fetchall()]
+
+                    # Use Claude analyzer for chat response
+                    claude_analyzer = ClaudeAnalyzer(self._diag_agent.config)
+
+                    # Create diagnostic prompt
+                    chat_prompt = f"""
+You are a diagnostic AI assistant for a Raspberry Pi CM5 system. A user has asked: "{message}"
+
+System Context:
+- Recent analyses: {len(context['recent_analyses'])}
+- Active alerts: {len(context['active_alerts'])}
+
+Please provide a helpful, technical response focusing on system diagnostics, monitoring, and troubleshooting.
+If the user is asking about system health, refer to the context data provided.
+Keep responses concise but informative.
+"""
+
+                    response = claude_analyzer.analyze_logs(chat_prompt, {}, 'chat_interaction')
+
+                    if response and isinstance(response, dict):
+                        ai_response = response.get('summary', 'I apologize, but I was unable to process your request properly.')
+                    else:
+                        ai_response = str(response) if response else 'I apologize, but I cannot provide a response at this time. Please check the AI service configuration.'
+
+                    # Store chat message in database
+                    chat_id = str(uuid.uuid4())
+                    timestamp = datetime.now().isoformat()
+
+                    with sqlite3.connect(db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+
+                        # Create chat_messages table if it doesn't exist
+                        cursor.execute("""
+                            CREATE TABLE IF NOT EXISTS chat_messages (
+                                id TEXT PRIMARY KEY,
+                                timestamp TEXT NOT NULL,
+                                message TEXT NOT NULL,
+                                response TEXT NOT NULL,
+                                role TEXT NOT NULL,
+                                context TEXT
+                            )
+                        """)
+
+                        # Insert chat message
+                        cursor.execute("""
+                            INSERT INTO chat_messages (id, timestamp, message, response, role, context)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (chat_id, timestamp, message, ai_response, 'user', json.dumps(context)))
+
+                    chat_message = {
+                        'id': chat_id,
+                        'timestamp': timestamp,
+                        'message': message,
+                        'response': ai_response,
+                        'role': 'user',
+                        'context': context
+                    }
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data=chat_message
+                    )
+
+                except Exception as e:
+                    return self._error_response(f"Failed to send chat message: {str(e)}", request_id)
+
+            elif action == 'get_chat_history':
+                try:
+                    limit = params.get('limit', 50)
+
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    db_manager = self._diag_agent.db_manager
+
+                    with sqlite3.connect(db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+
+                        # Create table if it doesn't exist
+                        cursor.execute("""
+                            CREATE TABLE IF NOT EXISTS chat_messages (
+                                id TEXT PRIMARY KEY,
+                                timestamp TEXT NOT NULL,
+                                message TEXT NOT NULL,
+                                response TEXT NOT NULL,
+                                role TEXT NOT NULL,
+                                context TEXT
+                            )
+                        """)
+
+                        cursor.execute("""
+                            SELECT id, timestamp, message, response, role, context
+                            FROM chat_messages
+                            ORDER BY timestamp DESC
+                            LIMIT ?
+                        """, (limit,))
+
+                        chat_history = []
+                        for row in cursor.fetchall():
+                            context_data = {}
+                            try:
+                                context_data = json.loads(row[5]) if row[5] else {}
+                            except:
+                                pass
+
+                            chat_history.append({
+                                'id': row[0],
+                                'timestamp': row[1],
+                                'message': row[2],
+                                'response': row[3],
+                                'role': row[4],
+                                'context': context_data
+                            })
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data=chat_history
+                    )
+
+                except Exception as e:
+                    return self._error_response(f"Failed to get chat history: {str(e)}", request_id)
+
+            elif action == 'clear_chat_history':
+                try:
+                    if not hasattr(self, '_diag_agent'):
+                        self._diag_agent = LogMonitoringAgent()
+
+                    db_manager = self._diag_agent.db_manager
+
+                    with sqlite3.connect(db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM chat_messages")
+                        deleted_count = cursor.rowcount
+
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data={
+                            'success': True,
+                            'deleted_messages': deleted_count
+                        }
+                    )
+
+                except Exception as e:
+                    return self._error_response(f"Failed to clear chat history: {str(e)}", request_id)
+
             else:
                 return self._error_response(f"Unknown DIAG Agent action: {action}", request_id)
 
@@ -2266,8 +2587,27 @@ def create_api_server(host='localhost', port=8080, hmi_api=None):
             'error': 'No frame available'
         })
 
+    # Setup signal handlers for graceful shutdown
+    def signal_handler(signum, frame):
+        print(f"Received signal {signum}, shutting down gracefully...")
+        hmi_api.disconnect_all()
+        exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
+
+    # Start GPIO status indicator
+    print(f"Starting GPIO status indicator on pin {hmi_api.gpio_controller.gpio_pin}")
+    hmi_api.gpio_controller.start_status_blink()
+
     print(f"Starting HMI API server on http://{host}:{port}")
-    app.run(host=host, port=port, debug=False)
+
+    try:
+        app.run(host=host, port=port, debug=False)
+    finally:
+        # Cleanup on shutdown
+        print("Shutting down HMI API server...")
+        hmi_api.disconnect_all()
 
 def create_websocket_server(host='localhost', port=8081, hmi_api=None):
     """

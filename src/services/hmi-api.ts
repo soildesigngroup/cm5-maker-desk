@@ -205,6 +205,8 @@ export interface DiagAgentStatus {
   avg_response_time: number;
   api_calls_today: number;
   next_scheduled_analysis: string | null;
+  ai_online: boolean;
+  ai_status_message: string;
 }
 
 export interface LogAnalysis {
@@ -1009,6 +1011,14 @@ export class HMIApiService {
       action: 'clear_chat_history',
       device: 'diag_agent',
       request_id: `diag_chat_clear_${Date.now()}`,
+    });
+  }
+
+  async validateDiagApiKey(): Promise<APIResponse<{ ai_online: boolean; api_key_valid: boolean; message: string }>> {
+    return this.sendCommand<{ ai_online: boolean; api_key_valid: boolean; message: string }>({
+      action: 'validate_api_key',
+      device: 'diag_agent',
+      request_id: `diag_validate_${Date.now()}`,
     });
   }
 
