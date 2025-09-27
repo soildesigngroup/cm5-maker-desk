@@ -34,6 +34,14 @@ except ImportError:
     logger.info("picamera2 not available. USB camera mode only.")
     PICAMERA_AVAILABLE = False
 
+try:
+    import depthai as dai
+    DEPTHAI_AVAILABLE = True
+    logger.info("DepthAI available")
+except ImportError:
+    logger.warning("DepthAI not available. Install with: pip install depthai")
+    DEPTHAI_AVAILABLE = False
+
 @dataclass
 class Detection:
     """Single object detection result"""
@@ -111,7 +119,24 @@ class CameraManager:
             except Exception as e:
                 logger.info(f"Pi camera not available: {e}")
 
+        # Check for DepthAI cameras
+        if DEPTHAI_AVAILABLE:
+            try:
+                devices = dai.Device.getAllAvailableDevices()
+                for i, device in enumerate(devices):
+                    cameras.append(CameraInfo(
+                        camera_id=-100 - i,  # Special negative IDs for DepthAI cameras
+                        camera_type='depthai',
+                        name=f'DepthAI Camera {device.name}',
+                        resolution=(1920, 1080),  # Default DepthAI resolution
+                        available=True
+                    ))
+                logger.info(f"Found {len(devices)} DepthAI camera(s)")
+            except Exception as e:
+                logger.warning(f"DepthAI camera detection failed: {e}")
+
         self.available_cameras = cameras
+        logger.info(f"Found {len(cameras)} cameras")
         return cameras
 
     def start_camera(self, camera_id: int) -> bool:
@@ -153,6 +178,19 @@ class CameraManager:
                 self.cap.configure(camera_config)
                 self.cap.start()
 
+            elif camera_info.camera_type == 'depthai':
+                if not DEPTHAI_AVAILABLE:
+                    logger.error("DepthAI not available")
+                    return False
+
+                # Create DepthAI device using 3.0 API (no pipeline needed)
+                device = dai.Device()
+
+                # Get RGB output queue directly from device
+                q_rgb = device.getOutputQueue("rgb", maxSize=4, blocking=False)
+
+                self.cap = {'device': device, 'queue': q_rgb}
+
             self.current_camera = camera_info
             logger.info(f"Started camera: {camera_info.name}")
             return True
@@ -174,6 +212,15 @@ class CameraManager:
             elif self.current_camera.camera_type == 'picamera':
                 return self.cap.capture_array()
 
+            elif self.current_camera.camera_type == 'depthai':
+                # Get frame from DepthAI queue
+                in_rgb = self.cap['queue'].tryGet()
+                if in_rgb is not None:
+                    # Convert to OpenCV format - DepthAI 3.0 API
+                    frame = in_rgb.getCvFrame()
+                    return frame
+                return None
+
         except Exception as e:
             logger.error(f"Error capturing frame: {e}")
             return None
@@ -187,6 +234,10 @@ class CameraManager:
                 elif self.current_camera and self.current_camera.camera_type == 'picamera':
                     self.cap.stop()
                     self.cap.close()
+                elif self.current_camera and self.current_camera.camera_type == 'depthai':
+                    # Close DepthAI device
+                    if isinstance(self.cap, dict) and 'device' in self.cap:
+                        self.cap['device'].close()
             except Exception as e:
                 logger.error(f"Error stopping camera: {e}")
 

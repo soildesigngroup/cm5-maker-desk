@@ -312,7 +312,7 @@ class HMIJsonAPI:
 
         # ADC Data Logger
         logging_config = LoggingConfig(
-            enabled=True,
+            enabled=False,  # Changed to False - user must manually start logging
             sample_interval=2.0,
             max_memory_points=1800,  # 1 hour at 2 second intervals
             file_rotation_hours=24,
@@ -324,9 +324,7 @@ class HMIJsonAPI:
         if auto_connect:
             self.initialize_devices()
 
-        # Start ADC logging if enabled
-        if self.adc_logger.config.enabled:
-            self.adc_logger.start_logging()
+        # ADC logging is now manual - user must start it via the API
 
         # Initialize AI-Vision system
         if AI_VISION_AVAILABLE:
@@ -682,6 +680,7 @@ class HMIJsonAPI:
 
         elif action == 'start_logging':
             if not self.adc_logger.logging_active:
+                self.adc_logger.config.enabled = True  # Enable logging config
                 self.adc_logger.start_logging()
 
             return APIResponse(
@@ -693,6 +692,7 @@ class HMIJsonAPI:
 
         elif action == 'stop_logging':
             if self.adc_logger.logging_active:
+                self.adc_logger.config.enabled = False  # Disable logging config
                 self.adc_logger.stop_logging()
 
             return APIResponse(
@@ -1523,7 +1523,30 @@ def create_api_server(host='localhost', port=8080, hmi_api=None):
             generate_frames(),
             mimetype='multipart/x-mixed-replace; boundary=frame'
         )
-    
+
+    @app.route('/api/ai_vision/frame')
+    def get_frame():
+        """Get single frame as base64-encoded JPEG"""
+        import base64
+
+        if hmi_api.ai_vision and hmi_api.ai_vision.active:
+            frame_data = hmi_api.ai_vision.get_latest_frame()
+            if frame_data:
+                # Encode frame data as base64
+                frame_base64 = base64.b64encode(frame_data).decode('utf-8')
+                return jsonify({
+                    'success': True,
+                    'timestamp': time.time(),
+                    'frame': frame_base64,
+                    'format': 'jpeg'
+                })
+
+        return jsonify({
+            'success': False,
+            'timestamp': time.time(),
+            'error': 'No frame available'
+        })
+
     print(f"Starting HMI API server on http://{host}:{port}")
     app.run(host=host, port=port, debug=False)
 
