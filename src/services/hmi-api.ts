@@ -100,7 +100,7 @@ export class HMIApiService {
   private ws: WebSocket | null = null;
   private eventCallbacks: Map<string, (data: any) => void> = new Map();
 
-  constructor(baseUrl: string = 'http://localhost:8082') {
+  constructor(baseUrl: string = 'http://localhost:8080') {
     this.baseUrl = baseUrl;
   }
 
