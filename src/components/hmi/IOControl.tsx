@@ -99,7 +99,7 @@ export function IOControl({ apiService }: IOControlProps) {
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
         <CardTitle className="flex items-center gap-2">
           <ToggleLeft className="w-5 h-5 text-primary" />
-          I/O Control (PCAL9555A)
+          I/O Control (PCAL9555A - 0x24)
         </CardTitle>
         <div className="flex items-center gap-2">
           <Button

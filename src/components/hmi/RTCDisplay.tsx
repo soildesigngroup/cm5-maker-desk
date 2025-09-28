@@ -93,7 +93,7 @@ export function RTCDisplay({ apiService }: RTCDisplayProps) {
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
         <CardTitle className="flex items-center gap-2">
           <Clock className="w-5 h-5 text-primary" />
-          Real-Time Clock (PCF85063A)
+          Real-Time Clock (PCF85063A - 0x51)
         </CardTitle>
         <div className="flex items-center gap-2">
           <Button

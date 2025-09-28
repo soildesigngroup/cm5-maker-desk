@@ -153,7 +153,7 @@ export function ADCMonitor({ apiService }: ADCMonitorProps) {
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
             <CardTitle className="flex items-center gap-2">
               <BarChart3 className="w-5 h-5 text-primary" />
-              ADC Monitor (ADS7828)
+              ADC Monitor (ADS7828 - 0x48)
             </CardTitle>
             <div className="flex items-center gap-2">
               <Button

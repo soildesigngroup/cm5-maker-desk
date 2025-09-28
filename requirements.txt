@@ -1,0 +1,27 @@
+# AI-Powered Log Monitoring Agent Dependencies
+# Optimized for Raspberry Pi resource constraints
+
+# Existing project dependencies
+flask
+flask-cors
+smbus2
+python-can
+cantact
+websockets
+requests
+
+# Log Monitoring Agent dependencies
+anthropic>=0.34.0
+schedule>=1.2.0
+
+# Built-in modules (no installation required):
+# - sqlite3 (database)
+# - smtplib (email alerts)
+# - pathlib, re, json, datetime (utilities)
+# - logging (application logging)
+# - os, time (system operations)
+
+# Optional: For enhanced features (uncomment if needed)
+# psutil>=5.9.0          # System resource monitoring
+# watchdog>=3.0.0        # File system event monitoring
+# colorama>=0.4.6        # Colored console output

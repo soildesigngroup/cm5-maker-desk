@@ -157,7 +157,7 @@ export function FanController({ apiService }: FanControllerProps) {
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
         <CardTitle className="flex items-center gap-2">
           <Fan className={`w-5 h-5 text-primary ${fanStatus && fanStatus.rpm > 0 ? 'animate-spin' : ''}`} />
-          Fan Controller (EMC2301)
+          Fan Controller (EMC2301 - 0x2F)
         </CardTitle>
         <div className="flex items-center gap-2">
           <Button

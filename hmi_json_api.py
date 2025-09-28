@@ -181,6 +181,156 @@ class GPIOStatusController:
             # Silently ignore GPIO errors to prevent app crashes
             pass
 
+class AudioInterface:
+    """Controls TSCS42xx Audio CODEC via ALSA controls"""
+
+    def __init__(self):
+        self.device_name = "hw:0"  # Default ALSA device
+        self.available_controls = {}
+        self._refresh_controls()
+
+    def connect(self) -> bool:
+        """Connect to audio interface (ALSA)"""
+        try:
+            # Test if ALSA is available by listing controls
+            result = subprocess.run(['amixer', '-c', '0', 'info'],
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                self._refresh_controls()
+                print(f"Audio interface connected with {len(self.available_controls)} controls")
+                return True
+            else:
+                print("Warning: Audio interface unavailable - no ALSA card 0")
+                return False
+        except Exception as e:
+            print(f"Warning: Could not connect to audio interface: {e}")
+            return False
+
+    def _refresh_controls(self):
+        """Scan available ALSA controls"""
+        try:
+            result = subprocess.run(['amixer', '-c', '0', 'controls'],
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if line.strip() and 'name=' in line:
+                        # Parse control name
+                        name_start = line.find("name='") + 6
+                        name_end = line.find("'", name_start)
+                        if name_start > 5 and name_end > name_start:
+                            control_name = line[name_start:name_end]
+                            self.available_controls[control_name] = True
+        except Exception as e:
+            print(f"Warning: Could not scan ALSA controls: {e}")
+
+    def get_control_value(self, control_name: str) -> Optional[str]:
+        """Get current value of an ALSA control"""
+        try:
+            result = subprocess.run(['amixer', '-c', '0', 'cget', f"name='{control_name}'"],
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                # Parse the value from amixer output
+                for line in result.stdout.split('\n'):
+                    if ': values=' in line:
+                        return line.split(': values=')[1].strip()
+            return None
+        except Exception as e:
+            print(f"Error reading control {control_name}: {e}")
+            return None
+
+    def set_control_value(self, control_name: str, value: str) -> bool:
+        """Set value of an ALSA control"""
+        try:
+            result = subprocess.run(['amixer', '-c', '0', 'cset', f"name='{control_name}'", value],
+                                  capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except Exception as e:
+            print(f"Error setting control {control_name}: {e}")
+            return False
+
+    def get_volume_controls(self) -> Dict[str, Any]:
+        """Get all volume-related controls"""
+        volume_controls = {}
+        volume_keywords = ['Volume', 'volume']
+
+        for control_name in self.available_controls:
+            if any(keyword in control_name for keyword in volume_keywords):
+                value = self.get_control_value(control_name)
+                volume_controls[control_name] = {
+                    'value': value,
+                    'type': 'volume'
+                }
+        return volume_controls
+
+    def get_switch_controls(self) -> Dict[str, Any]:
+        """Get all switch/enable controls"""
+        switch_controls = {}
+        switch_keywords = ['Switch', 'Enable', 'switch', 'enable']
+
+        for control_name in self.available_controls:
+            if any(keyword in control_name for keyword in switch_keywords):
+                value = self.get_control_value(control_name)
+                switch_controls[control_name] = {
+                    'value': value,
+                    'type': 'switch'
+                }
+        return switch_controls
+
+    def get_eq_controls(self) -> Dict[str, Any]:
+        """Get equalizer controls"""
+        eq_controls = {}
+        eq_keywords = ['EQ', 'eq', 'Equalizer']
+
+        for control_name in self.available_controls:
+            if any(keyword in control_name for keyword in eq_keywords):
+                value = self.get_control_value(control_name)
+                eq_controls[control_name] = {
+                    'value': value,
+                    'type': 'eq'
+                }
+        return eq_controls
+
+    def get_all_controls(self) -> Dict[str, Any]:
+        """Get all available audio controls with their current values"""
+        all_controls = {}
+
+        for control_name in self.available_controls:
+            value = self.get_control_value(control_name)
+            control_type = 'unknown'
+
+            # Categorize control
+            if any(keyword in control_name for keyword in ['Volume', 'volume']):
+                control_type = 'volume'
+            elif any(keyword in control_name for keyword in ['Switch', 'Enable', 'switch', 'enable']):
+                control_type = 'switch'
+            elif any(keyword in control_name for keyword in ['EQ', 'eq', 'Equalizer']):
+                control_type = 'eq'
+            elif any(keyword in control_name for keyword in ['Route', 'route']):
+                control_type = 'routing'
+            elif any(keyword in control_name for keyword in ['Comp', 'comp', 'Limiter', 'limiter']):
+                control_type = 'dynamics'
+
+            all_controls[control_name] = {
+                'value': value,
+                'type': control_type,
+                'available': True
+            }
+
+        return all_controls
+
+    def test_audio_device(self) -> bool:
+        """Test if audio device is available"""
+        try:
+            # Test if we can access ALSA controls (more reliable than checking device names)
+            result = subprocess.run(['amixer', '-c', '0', 'info'],
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                # If we have available controls, the device is working
+                return len(self.available_controls) > 0
+            return False
+        except Exception:
+            return False
+
 class ADCDataLogger:
     """
     ADC Data Logger - handles time-series logging of ADC readings
@@ -398,7 +548,8 @@ class HMIJsonAPI:
             'rtc': {'class': PCF85063A, 'address': 0x51},
             'fan': {'class': EMC2301, 'address': 0x2F},
             'eeprom': {'class': AT24CM01, 'base_address': 0x56},
-            'ai_vision': {'class': None, 'enabled': AI_VISION_AVAILABLE}
+            'ai_vision': {'class': None, 'enabled': AI_VISION_AVAILABLE},
+            'audio': {'class': AudioInterface, 'enabled': True}
         }
         
         # API state
@@ -480,6 +631,8 @@ class HMIJsonAPI:
                         bus_number=self.bus_number,
                         base_address=config['base_address']
                     )
+                elif device_id == 'audio':
+                    device = device_class()
                 else:
                     device = device_class(
                         bus_number=self.bus_number,
@@ -528,7 +681,8 @@ class HMIJsonAPI:
             'io': ['read_pin', 'write_pin', 'configure_pin', 'read_all_pins', 'reset', 'get_status'],
             'rtc': ['read_datetime', 'set_datetime', 'set_alarm', 'set_clkout', 'get_status'],
             'fan': ['set_pwm', 'set_rpm', 'read_rpm', 'get_status', 'configure'],
-            'eeprom': ['read', 'write', 'read_string', 'write_string', 'erase', 'test', 'get_info']
+            'eeprom': ['read', 'write', 'read_string', 'write_string', 'erase', 'test', 'get_info'],
+            'audio': ['get_status', 'get_all_controls', 'get_volume_controls', 'get_switch_controls', 'get_eq_controls', 'set_control', 'get_control', 'refresh_controls']
         }
         return capabilities.get(device_id, [])
     
@@ -649,6 +803,8 @@ class HMIJsonAPI:
                 return self._handle_can_command(device, action, params, request_id)
             elif device_id == 'automation':
                 return self._handle_automation_command(device, action, params, request_id)
+            elif device_id == 'audio':
+                return self._handle_audio_command(device, action, params, request_id)
             elif device_id == 'diag_agent':
                 return self._handle_diag_agent_command(device, action, params, request_id)
             else:
@@ -1240,11 +1396,12 @@ class HMIJsonAPI:
             camera_id = params.get('camera_id', 0)
             model_name = params.get('model_name', 'yolo11n.pt')
 
-            # Load model if different
+            # Load model if different and YOLO is available
             current_model = device.inference_engine.model_name
             if current_model != model_name:
                 if not device.inference_engine.load_model(model_name):
-                    return self._error_response(f"Failed to load model: {model_name}", request_id)
+                    # Allow camera-only mode if YOLO model loading fails
+                    pass  # Continue in camera-only mode
 
             success = device.start(camera_id)
 
@@ -2483,6 +2640,194 @@ Keep responses concise but informative.
 
         except Exception as e:
             return self._error_response(f"DIAG Agent command failed: {str(e)}", request_id)
+
+    def _handle_audio_command(self, device, action: str, params: Dict, request_id: str) -> APIResponse:
+        """Handle Audio Output commands"""
+        try:
+            if action == 'get_status':
+                # Get audio device status
+                audio_available = device.test_audio_device() if device else False
+                total_controls = len(device.available_controls) if device else 0
+
+                # Count different types of controls
+                volume_controls = len(device.get_volume_controls()) if device else 0
+                switch_controls = len(device.get_switch_controls()) if device else 0
+                eq_controls = len(device.get_eq_controls()) if device else 0
+
+                status_data = {
+                    'connected': audio_available,
+                    'card_id': 0,
+                    'card_name': device.device_name if device else 'hw:0',
+                    'total_controls': total_controls,
+                    'volume_controls': volume_controls,
+                    'switch_controls': switch_controls,
+                    'eq_controls': eq_controls,
+                    'last_refresh': time.time()
+                }
+
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=status_data
+                )
+
+            elif action == 'get_all_controls':
+                # Get all available audio controls
+                if not device:
+                    return self._error_response("Audio device not available", request_id)
+
+                controls = device.get_all_controls()
+
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=controls
+                )
+
+            elif action == 'get_volume_controls':
+                # Get volume controls only
+                if not device:
+                    return self._error_response("Audio device not available", request_id)
+
+                volume_controls_dict = device.get_volume_controls()
+
+                # Convert to array format expected by React component
+                volume_controls = []
+                for name, control in volume_controls_dict.items():
+                    volume_controls.append({
+                        'name': name,
+                        'type': control.get('type', 'volume'),
+                        'value': control.get('value', '0')
+                    })
+
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=volume_controls
+                )
+
+            elif action == 'get_switch_controls':
+                # Get switch/enable controls
+                if not device:
+                    return self._error_response("Audio device not available", request_id)
+
+                switch_controls_dict = device.get_switch_controls()
+
+                # Convert to array format expected by React component
+                switch_controls = []
+                for name, control in switch_controls_dict.items():
+                    switch_controls.append({
+                        'name': name,
+                        'type': control.get('type', 'switch'),
+                        'value': control.get('value', '0')
+                    })
+
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=switch_controls
+                )
+
+            elif action == 'get_eq_controls':
+                # Get equalizer controls
+                if not device:
+                    return self._error_response("Audio device not available", request_id)
+
+                eq_controls_dict = device.get_eq_controls()
+
+                # Convert to array format expected by React component
+                eq_controls = []
+                for name, control in eq_controls_dict.items():
+                    eq_controls.append({
+                        'name': name,
+                        'type': control.get('type', 'eq'),
+                        'value': control.get('value', '0')
+                    })
+
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=eq_controls
+                )
+
+            elif action == 'set_control':
+                # Set a specific audio control
+                if not device:
+                    return self._error_response("Audio device not available", request_id)
+
+                control_name = params.get('control_name')
+                value = params.get('value')
+
+                if not control_name or value is None:
+                    return self._error_response("Missing control_name or value parameter", request_id)
+
+                success = device.set_control_value(control_name, str(value))
+
+                if success:
+                    # Get the updated value to confirm
+                    updated_value = device.get_control_value(control_name)
+                    return APIResponse(
+                        success=True,
+                        timestamp=time.time(),
+                        request_id=request_id,
+                        data={
+                            'control_name': control_name,
+                            'value': updated_value,
+                            'set_success': True
+                        }
+                    )
+                else:
+                    return self._error_response(f"Failed to set control '{control_name}'", request_id)
+
+            elif action == 'get_control':
+                # Get value of a specific control
+                if not device:
+                    return self._error_response("Audio device not available", request_id)
+
+                control_name = params.get('control_name')
+                if not control_name:
+                    return self._error_response("Missing control_name parameter", request_id)
+
+                value = device.get_control_value(control_name)
+
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={
+                        'control_name': control_name,
+                        'value': value
+                    }
+                )
+
+            elif action == 'refresh_controls':
+                # Refresh the list of available controls
+                if not device:
+                    return self._error_response("Audio device not available", request_id)
+
+                device._refresh_controls()
+                control_count = len(device.available_controls)
+
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={
+                        'message': f'Refreshed audio controls, found {control_count} controls',
+                        'control_count': control_count
+                    }
+                )
+
+            else:
+                return self._error_response(f"Unknown audio action: {action}", request_id)
+
+        except Exception as e:
+            return self._error_response(f"Audio command failed: {str(e)}", request_id)
 
     def _error_response(self, message: str, request_id: str = None) -> APIResponse:
         """Create error response"""

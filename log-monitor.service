@@ -1,0 +1,56 @@
+[Unit]
+Description=AI-Powered Log Monitoring Agent
+Documentation=https://github.com/your-repo/log-monitor
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=log-monitor
+Group=log-monitor
+WorkingDirectory=/opt/log-monitor
+ExecStart=/usr/bin/python3 /opt/log-monitor/log_monitor.py
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# Security settings for Raspberry Pi
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/log-monitor /var/log/log-monitor /var/log/nginx /var/log/apache2 /var/log
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# Resource limits optimized for Raspberry Pi
+MemoryLimit=256M
+CPUQuota=50%
+IOWeight=100
+
+# Environment variables
+Environment=PYTHONPATH=/opt/log-monitor
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=UTC
+
+# Logging configuration
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=log-monitor
+
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+Alias=logmonitor.service
