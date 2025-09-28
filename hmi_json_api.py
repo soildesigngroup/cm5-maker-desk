@@ -19,6 +19,10 @@ import csv
 import sqlite3
 import subprocess
 import signal
+import shutil
+import psutil
+import re
+import glob
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, asdict
@@ -718,6 +722,12 @@ class HMIJsonAPI:
                 response = self._handle_get_system_status(request_id)
             elif action == 'get_device_list':
                 response = self._handle_get_device_list(request_id)
+            elif action == 'get_storage_info':
+                response = self._handle_get_storage_info(request_id)
+            elif action == 'format_drive':
+                response = self._handle_format_drive(request_id, params)
+            elif action == 'test_storage_speed':
+                response = self._handle_test_storage_speed(request_id, params)
             elif action == 'start_monitoring':
                 response = self._handle_start_monitoring(request_id, params)
             elif action == 'stop_monitoring':
@@ -770,7 +780,509 @@ class HMIJsonAPI:
             request_id=request_id,
             data={'devices': devices_data}
         )
-    
+
+    def _handle_get_storage_info(self, request_id: str) -> APIResponse:
+        """Get storage information including NVMe PCIe drives"""
+        try:
+            storage_data = self._get_storage_info()
+
+            return APIResponse(
+                success=True,
+                timestamp=time.time(),
+                request_id=request_id,
+                data=storage_data
+            )
+        except Exception as e:
+            return self._error_response(f"Storage info error: {str(e)}", request_id)
+
+    def _handle_format_drive(self, request_id: str, params: Dict) -> APIResponse:
+        """Handle drive formatting requests"""
+        try:
+            device_path = params.get('device_path')
+            filesystem = params.get('filesystem', 'ext4')
+            label = params.get('label', 'ExternalDrive')
+
+            if not device_path:
+                return self._error_response("Missing device_path parameter", request_id)
+
+            # Security check - only allow NVMe devices
+            if not device_path.startswith('/dev/nvme'):
+                return self._error_response("Only NVMe devices are allowed for formatting", request_id)
+
+            # Verify device exists
+            if not os.path.exists(device_path):
+                return self._error_response(f"Device {device_path} not found", request_id)
+
+            # Format the drive
+            format_result = self._format_drive(device_path, filesystem, label)
+
+            if format_result['success']:
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data={
+                        'message': f"Successfully formatted {device_path} with {filesystem}",
+                        'device_path': device_path,
+                        'filesystem': filesystem,
+                        'label': label,
+                        'mount_point': format_result.get('mount_point')
+                    }
+                )
+            else:
+                return self._error_response(f"Format failed: {format_result.get('error', 'Unknown error')}", request_id)
+
+        except Exception as e:
+            return self._error_response(f"Format drive error: {str(e)}", request_id)
+
+    def _format_drive(self, device_path: str, filesystem: str, label: str) -> Dict:
+        """Format a drive with the specified filesystem"""
+        try:
+            # Unmount if mounted
+            try:
+                subprocess.run(['sudo', 'umount', device_path], capture_output=True, timeout=10)
+            except:
+                pass  # Device might not be mounted
+
+            # Create partition table (GPT)
+            print(f"Creating partition table on {device_path}...")
+            result = subprocess.run(['sudo', 'parted', '-s', device_path, 'mklabel', 'gpt'],
+                                  capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                return {'success': False, 'error': f"Failed to create partition table: {result.stderr}"}
+
+            # Create partition
+            print(f"Creating partition on {device_path}...")
+            result = subprocess.run(['sudo', 'parted', '-s', device_path, 'mkpart', 'primary', '0%', '100%'],
+                                  capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                return {'success': False, 'error': f"Failed to create partition: {result.stderr}"}
+
+            # Wait for partition to appear
+            partition_path = f"{device_path}p1"
+            for i in range(10):  # Wait up to 10 seconds
+                if os.path.exists(partition_path):
+                    break
+                time.sleep(1)
+
+            if not os.path.exists(partition_path):
+                return {'success': False, 'error': f"Partition {partition_path} did not appear"}
+
+            # Format with filesystem
+            print(f"Formatting {partition_path} with {filesystem}...")
+            if filesystem == 'ext4':
+                cmd = ['sudo', 'mkfs.ext4', '-F', '-L', label, partition_path]
+            elif filesystem == 'fat32':
+                cmd = ['sudo', 'mkfs.fat', '-F', '32', '-n', label, partition_path]
+            elif filesystem == 'ntfs':
+                cmd = ['sudo', 'mkfs.ntfs', '-Q', '-L', label, partition_path]
+            else:
+                return {'success': False, 'error': f"Unsupported filesystem: {filesystem}"}
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                return {'success': False, 'error': f"Failed to format: {result.stderr}"}
+
+            # Create mount point and mount
+            mount_point = f"/media/{os.getenv('USER', 'user')}/{label}"
+            try:
+                subprocess.run(['sudo', 'mkdir', '-p', mount_point], capture_output=True, timeout=10)
+                result = subprocess.run(['sudo', 'mount', partition_path, mount_point],
+                                      capture_output=True, text=True, timeout=10)
+                if result.returncode != 0:
+                    print(f"Warning: Failed to mount {partition_path}: {result.stderr}")
+                    mount_point = None
+            except Exception as e:
+                print(f"Warning: Failed to create/mount {mount_point}: {e}")
+                mount_point = None
+
+            return {
+                'success': True,
+                'device_path': device_path,
+                'partition_path': partition_path,
+                'filesystem': filesystem,
+                'label': label,
+                'mount_point': mount_point
+            }
+
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def _handle_test_storage_speed(self, request_id: str, params: Dict) -> APIResponse:
+        """Handle storage speed test requests"""
+        try:
+            device_path = params.get('device_path')
+            test_size = params.get('test_size', '100M')  # Default 100MB test
+
+            if not device_path:
+                return self._error_response("Device path is required", request_id)
+
+            # Security check - only allow mounted devices or known storage devices
+            partitions = psutil.disk_partitions()
+            valid_devices = [p.device for p in partitions]
+
+            # Also allow testing the raw block device (e.g., /dev/nvme0n1)
+            import re
+            base_device = re.sub(r'p?\d+$', '', device_path)
+            if device_path not in valid_devices and base_device not in [re.sub(r'p?\d+$', '', d) for d in valid_devices]:
+                return self._error_response(f"Device {device_path} is not accessible or not mounted", request_id)
+
+            # Run the speed test
+            speed_test_result = self._test_storage_speed(device_path, test_size)
+
+            if speed_test_result['success']:
+                return APIResponse(
+                    success=True,
+                    timestamp=time.time(),
+                    request_id=request_id,
+                    data=speed_test_result
+                )
+            else:
+                return self._error_response(f"Speed test failed: {speed_test_result.get('error', 'Unknown error')}", request_id)
+
+        except Exception as e:
+            return self._error_response(f"Speed test error: {str(e)}", request_id)
+
+    def _test_storage_speed(self, device_path: str, test_size: str = '100M') -> Dict:
+        """Test storage read/write speed using dd command"""
+        try:
+            # Get mount point for the device
+            partitions = psutil.disk_partitions()
+            mount_point = None
+            device_name = device_path.split('/')[-1]
+
+            for partition in partitions:
+                if partition.device == device_path:
+                    mount_point = partition.mountpoint
+                    break
+
+            if not mount_point:
+                return {'success': False, 'error': f'Device {device_path} is not mounted'}
+
+            # Create a temporary test directory using sudo
+            test_dir = os.path.join(mount_point, '.speed_test_tmp')
+            subprocess.run(['sudo', 'mkdir', '-p', test_dir], check=True)
+
+            test_file = os.path.join(test_dir, 'speedtest.tmp')
+
+            results = {
+                'success': True,
+                'device_path': device_path,
+                'device_name': device_name,
+                'mount_point': mount_point,
+                'test_size': test_size,
+                'write_speed_mbps': 0,
+                'read_speed_mbps': 0,
+                'write_time_seconds': 0,
+                'read_time_seconds': 0
+            }
+
+            # Write test
+            print(f"Testing write speed for {device_path}...")
+            start_time = time.time()
+            write_result = subprocess.run([
+                'sudo', 'dd', f'if=/dev/zero', f'of={test_file}',
+                f'bs=1M', f'count={test_size[:-1]}', 'conv=fdatasync'
+            ], capture_output=True, text=True, timeout=120)
+
+            write_time = time.time() - start_time
+            results['write_time_seconds'] = round(write_time, 2)
+
+            if write_result.returncode == 0:
+                # Parse dd output for write speed
+                dd_output = write_result.stderr
+                # Extract speed from dd output (e.g., "104857600 bytes (105 MB, 100 MiB) copied, 0.123456 s, 849 MB/s")
+                import re
+                speed_match = re.search(r'(\d+(?:\.\d+)?)\s*(MB/s|GB/s)', dd_output)
+                if speed_match:
+                    speed_value = float(speed_match.group(1))
+                    speed_unit = speed_match.group(2)
+                    if speed_unit == 'GB/s':
+                        speed_value *= 1000  # Convert to MB/s
+                    results['write_speed_mbps'] = round(speed_value, 2)
+                else:
+                    # Fallback calculation
+                    size_bytes = int(test_size[:-1]) * 1024 * 1024  # Convert MB to bytes
+                    results['write_speed_mbps'] = round((size_bytes / write_time) / (1024 * 1024), 2)
+
+            # Read test
+            print(f"Testing read speed for {device_path}...")
+            start_time = time.time()
+            read_result = subprocess.run([
+                'sudo', 'dd', f'if={test_file}', f'of=/dev/null',
+                f'bs=1M'
+            ], capture_output=True, text=True, timeout=120)
+
+            read_time = time.time() - start_time
+            results['read_time_seconds'] = round(read_time, 2)
+
+            if read_result.returncode == 0:
+                # Parse dd output for read speed
+                dd_output = read_result.stderr
+                speed_match = re.search(r'(\d+(?:\.\d+)?)\s*(MB/s|GB/s)', dd_output)
+                if speed_match:
+                    speed_value = float(speed_match.group(1))
+                    speed_unit = speed_match.group(2)
+                    if speed_unit == 'GB/s':
+                        speed_value *= 1000  # Convert to MB/s
+                    results['read_speed_mbps'] = round(speed_value, 2)
+                else:
+                    # Fallback calculation
+                    size_bytes = int(test_size[:-1]) * 1024 * 1024  # Convert MB to bytes
+                    results['read_speed_mbps'] = round((size_bytes / read_time) / (1024 * 1024), 2)
+
+            # Clean up test file
+            try:
+                subprocess.run(['sudo', 'rm', '-f', test_file], check=False)
+                subprocess.run(['sudo', 'rmdir', test_dir], check=False)
+            except:
+                pass  # Ignore cleanup errors
+
+            return results
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'error': 'Speed test timed out'}
+        except Exception as e:
+            # Clean up test file on error
+            try:
+                if 'test_file' in locals():
+                    subprocess.run(['sudo', 'rm', '-f', test_file], check=False)
+                if 'test_dir' in locals():
+                    subprocess.run(['sudo', 'rmdir', test_dir], check=False)
+            except:
+                pass
+            return {'success': False, 'error': str(e)}
+
+    def _get_storage_info(self) -> Dict:
+        """Get detailed storage information including NVMe detection"""
+
+        storage_info = {
+            'timestamp': time.time(),
+            'devices': [],
+            'nvme_devices': [],
+            'unformatted_devices': [],
+            'external_connected': False,
+            'total_external_capacity': 0,
+            'total_external_used': 0,
+            'total_external_available': 0
+        }
+
+        try:
+            # Get all disk partitions
+            partitions = psutil.disk_partitions()
+
+            for partition in partitions:
+                try:
+                    # Get usage info
+                    usage = psutil.disk_usage(partition.mountpoint)
+
+                    # Determine if this is an NVMe device
+                    is_nvme = 'nvme' in partition.device.lower()
+
+                    # Determine if this is likely external storage
+                    # Check if it's not root filesystem and is NVMe
+                    is_external = (
+                        is_nvme and
+                        partition.mountpoint not in ['/', '/boot', '/boot/efi', '/boot/firmware'] and
+                        not partition.mountpoint.startswith('/snap') and
+                        not partition.mountpoint.startswith('/sys') and
+                        not partition.mountpoint.startswith('/proc') and
+                        not partition.mountpoint.startswith('/dev') and
+                        not partition.mountpoint.startswith('/run')
+                    )
+
+                    # Additional check for external NVMe - look for PCIe NVMe devices
+                    if is_nvme:
+                        # Check if this is likely a PCIe NVMe (not eMMC or built-in storage)
+                        device_path = partition.device
+                        if '/dev/nvme' in device_path:
+                            # Read NVMe info to determine if it's PCIe
+                            try:
+                                nvme_info = self._get_nvme_device_info(device_path)
+                                if nvme_info.get('is_pcie', False):
+                                    is_external = True
+                            except:
+                                pass
+
+                    device_info = {
+                        'name': os.path.basename(partition.device),
+                        'mountpoint': partition.mountpoint,
+                        'filesystem': partition.fstype,
+                        'size': usage.total,
+                        'used': usage.used,
+                        'available': usage.free,
+                        'use_percent': round((usage.used / usage.total) * 100, 1) if usage.total > 0 else 0,
+                        'device_path': partition.device,
+                        'is_nvme': is_nvme,
+                        'is_external': is_external
+                    }
+
+                    storage_info['devices'].append(device_info)
+
+                    # Add to NVMe devices list if applicable
+                    if is_nvme:
+                        storage_info['nvme_devices'].append(device_info)
+
+                    # Add to external totals if external
+                    if is_external:
+                        storage_info['external_connected'] = True
+                        storage_info['total_external_capacity'] += usage.total
+                        storage_info['total_external_used'] += usage.used
+                        storage_info['total_external_available'] += usage.free
+
+                except (PermissionError, FileNotFoundError, OSError):
+                    # Skip partitions we can't access
+                    continue
+
+            # Additional NVMe device detection using system info
+            nvme_devices = self._detect_nvme_devices()
+            if nvme_devices:
+                storage_info['external_connected'] = True
+
+            # Detect unformatted drives
+            unformatted_devices = self._detect_unformatted_drives()
+            storage_info['unformatted_devices'] = unformatted_devices
+            if unformatted_devices:
+                storage_info['external_connected'] = True
+
+        except Exception as e:
+            print(f"Error getting storage info: {e}")
+
+        return storage_info
+
+    def _get_nvme_device_info(self, device_path: str) -> Dict:
+        """Get detailed info about an NVMe device"""
+        nvme_info = {'is_pcie': False}
+
+        try:
+            # Extract NVMe device identifier (e.g., nvme0 from /dev/nvme0n1)
+            match = re.search(r'nvme(\d+)', device_path)
+            if match:
+                nvme_num = match.group(1)
+
+                # Check if this is a PCIe NVMe device
+                pcie_path = f"/sys/class/nvme/nvme{nvme_num}/device/subsystem"
+                if os.path.exists(pcie_path):
+                    # Read the subsystem link to determine if it's PCIe
+                    try:
+                        subsystem = os.readlink(pcie_path)
+                        if 'pci' in subsystem:
+                            nvme_info['is_pcie'] = True
+                    except:
+                        pass
+
+                # Try to read NVMe model and other info
+                try:
+                    model_path = f"/sys/class/nvme/nvme{nvme_num}/model"
+                    if os.path.exists(model_path):
+                        with open(model_path, 'r') as f:
+                            nvme_info['model'] = f.read().strip()
+                except:
+                    pass
+
+        except Exception as e:
+            print(f"Error getting NVMe device info: {e}")
+
+        return nvme_info
+
+    def _detect_nvme_devices(self) -> List[Dict]:
+        """Detect NVMe devices using system information"""
+        nvme_devices = []
+
+        try:
+            # Look for NVMe devices in /sys/class/nvme/
+            nvme_dirs = glob.glob('/sys/class/nvme/nvme*')
+
+            for nvme_dir in nvme_dirs:
+                if os.path.isdir(nvme_dir):
+                    device_info = {}
+
+                    # Get device model
+                    model_file = os.path.join(nvme_dir, 'model')
+                    if os.path.exists(model_file):
+                        try:
+                            with open(model_file, 'r') as f:
+                                device_info['model'] = f.read().strip()
+                        except:
+                            pass
+
+                    # Check if it's PCIe
+                    device_subsystem = os.path.join(nvme_dir, 'device', 'subsystem')
+                    if os.path.exists(device_subsystem):
+                        try:
+                            subsystem = os.readlink(device_subsystem)
+                            device_info['is_pcie'] = 'pci' in subsystem
+                        except:
+                            device_info['is_pcie'] = False
+
+                    nvme_devices.append(device_info)
+
+        except Exception as e:
+            print(f"Error detecting NVMe devices: {e}")
+
+        return nvme_devices
+
+    def _detect_unformatted_drives(self) -> List[Dict]:
+        """Detect unformatted drives that could be formatted"""
+        unformatted_devices = []
+
+        try:
+            # Use lsblk to find block devices without filesystems
+            result = subprocess.run(['lsblk', '-J', '-o', 'NAME,SIZE,TYPE,FSTYPE,MODEL,SERIAL'],
+                                  capture_output=True, text=True, timeout=10)
+
+            if result.returncode == 0:
+                lsblk_data = json.loads(result.stdout)
+
+                for device in lsblk_data.get('blockdevices', []):
+                    # Check if it's a disk (not partition) without filesystem
+                    # Also check if it has children (partitions) - if it does, it's formatted
+                    has_partitions = device.get('children') and len(device.get('children', [])) > 0
+                    if (device.get('type') == 'disk' and
+                        not device.get('fstype') and
+                        not has_partitions and
+                        'nvme' in device.get('name', '').lower()):
+
+                        # Get device size in bytes
+                        try:
+                            size_result = subprocess.run(['lsblk', '-b', '-d', '-n', '-o', 'SIZE', f"/dev/{device['name']}"],
+                                                       capture_output=True, text=True, timeout=5)
+                            size_bytes = int(size_result.stdout.strip()) if size_result.returncode == 0 else 0
+                        except:
+                            size_bytes = 0
+
+                        # Check if it's an NVMe PCIe device
+                        is_pcie = False
+                        if 'nvme' in device.get('name', ''):
+                            nvme_match = re.search(r'nvme(\d+)', device['name'])
+                            if nvme_match:
+                                nvme_num = nvme_match.group(1)
+                                pcie_path = f"/sys/class/nvme/nvme{nvme_num}/device/subsystem"
+                                if os.path.exists(pcie_path):
+                                    try:
+                                        subsystem = os.readlink(pcie_path)
+                                        is_pcie = 'pci' in subsystem
+                                    except:
+                                        pass
+
+                        device_info = {
+                            'name': device.get('name', ''),
+                            'device_path': f"/dev/{device.get('name', '')}",
+                            'size': size_bytes,
+                            'model': device.get('model', 'Unknown'),
+                            'serial': device.get('serial', 'Unknown'),
+                            'is_nvme': 'nvme' in device.get('name', '').lower(),
+                            'is_pcie': is_pcie,
+                            'needs_formatting': True
+                        }
+
+                        unformatted_devices.append(device_info)
+
+        except Exception as e:
+            print(f"Error detecting unformatted drives: {e}")
+
+        return unformatted_devices
+
     def _handle_device_command(self, action: str, device_id: str, params: Dict, request_id: str) -> APIResponse:
         """Handle device-specific commands"""
         
