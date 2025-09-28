@@ -515,6 +515,32 @@ class AIVisionSystem:
 
         return None
 
+    def process_frame(self, frame) -> Optional[Any]:
+        """Process external frame with AI detection and return annotated frame"""
+        if frame is None:
+            return None
+
+        try:
+            # Run inference if YOLO is available
+            detections = []
+            if self.inference_engine.model:
+                detections = self.inference_engine.detect(frame)
+
+                # Update statistics
+                if detections:
+                    self.total_detections += len(detections)
+                    self.last_detection_time = time.time()
+
+            # Draw detections on frame (if any)
+            annotated_frame = frame.copy()
+            if detections and self.inference_engine.model:
+                annotated_frame = self.inference_engine.draw_detections(annotated_frame, detections)
+            return annotated_frame
+
+        except Exception as e:
+            logger.error(f"Error processing external frame: {e}")
+            return frame  # Return original frame on error
+
     def get_recent_detections(self, max_count: int = 10) -> List[Dict]:
         """Get recent detections"""
         detections = []
