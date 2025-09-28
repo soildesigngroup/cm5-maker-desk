@@ -291,6 +291,26 @@ export interface ChatMessage {
   };
 }
 
+export interface AudioControl {
+  name: string;
+  type: 'volume' | 'switch' | 'enum' | 'eq';
+  value: string | number;
+  min?: number;
+  max?: number;
+  items?: string[];
+}
+
+export interface AudioStatus {
+  connected: boolean;
+  card_id: number;
+  card_name: string;
+  total_controls: number;
+  volume_controls: number;
+  switch_controls: number;
+  eq_controls: number;
+  last_refresh?: number;
+}
+
 export class HMIApiService {
   private baseUrl: string;
   private ws: WebSocket | null = null;
@@ -608,7 +628,7 @@ export class HMIApiService {
   }
 
   async getAIVisionFrameData(): Promise<APIResponse<{ frame: string; format: string; timestamp: number }>> {
-    return this.request(`/ai_vision/frame`);
+    return this.request(`/api/ai_vision/frame`);
   }
 
   // WebSocket Connection
@@ -1019,6 +1039,140 @@ export class HMIApiService {
       action: 'validate_api_key',
       device: 'diag_agent',
       request_id: `diag_validate_${Date.now()}`,
+    });
+  }
+
+  // Audio Interface Methods
+  async getAudioStatus(): Promise<APIResponse<AudioStatus>> {
+    return this.sendCommand<AudioStatus>({
+      action: 'get_status',
+      device: 'audio',
+      request_id: `audio_status_${Date.now()}`,
+    });
+  }
+
+  async getAllAudioControls(): Promise<APIResponse<AudioControl[]>> {
+    return this.sendCommand<AudioControl[]>({
+      action: 'get_all_controls',
+      device: 'audio',
+      request_id: `audio_all_controls_${Date.now()}`,
+    });
+  }
+
+  async getVolumeControls(): Promise<APIResponse<AudioControl[]>> {
+    return this.sendCommand<AudioControl[]>({
+      action: 'get_volume_controls',
+      device: 'audio',
+      request_id: `audio_volume_controls_${Date.now()}`,
+    });
+  }
+
+  async getSwitchControls(): Promise<APIResponse<AudioControl[]>> {
+    return this.sendCommand<AudioControl[]>({
+      action: 'get_switch_controls',
+      device: 'audio',
+      request_id: `audio_switch_controls_${Date.now()}`,
+    });
+  }
+
+  async getEQControls(): Promise<APIResponse<AudioControl[]>> {
+    return this.sendCommand<AudioControl[]>({
+      action: 'get_eq_controls',
+      device: 'audio',
+      request_id: `audio_eq_controls_${Date.now()}`,
+    });
+  }
+
+  async setAudioControl(controlName: string, value: string | number): Promise<APIResponse<{ success: boolean; message: string }>> {
+    return this.sendCommand<{ success: boolean; message: string }>({
+      action: 'set_control',
+      device: 'audio',
+      params: { control_name: controlName, value },
+      request_id: `audio_set_control_${Date.now()}`,
+    });
+  }
+
+  async getAudioControl(controlName: string): Promise<APIResponse<AudioControl>> {
+    return this.sendCommand<AudioControl>({
+      action: 'get_control',
+      device: 'audio',
+      params: { control_name: controlName },
+      request_id: `audio_get_control_${Date.now()}`,
+    });
+  }
+
+  async refreshAudioControls(): Promise<APIResponse<{ success: boolean; message: string }>> {
+    return this.sendCommand<{ success: boolean; message: string }>({
+      action: 'refresh_controls',
+      device: 'audio',
+      request_id: `audio_refresh_${Date.now()}`,
+    });
+  }
+
+  // AI-Vision Commands
+  async getAIVisionStatus(): Promise<APIResponse<AIVisionStatus>> {
+    return this.sendCommand<AIVisionStatus>({
+      action: 'get_status',
+      device: 'ai_vision',
+      request_id: `ai_vision_status_${Date.now()}`,
+    });
+  }
+
+  async listCameras(): Promise<APIResponse<{ cameras: CameraInfo[] }>> {
+    return this.sendCommand<{ cameras: CameraInfo[] }>({
+      action: 'list_cameras',
+      device: 'ai_vision',
+      request_id: `ai_vision_cameras_${Date.now()}`,
+    });
+  }
+
+  async startAIVision(cameraId: number, modelName?: string): Promise<APIResponse<{ success: boolean; message: string }>> {
+    return this.sendCommand<{ success: boolean; message: string }>({
+      action: 'start',
+      device: 'ai_vision',
+      params: { camera_id: cameraId, model_name: modelName },
+      request_id: `ai_vision_start_${Date.now()}`,
+    });
+  }
+
+  async stopAIVision(): Promise<APIResponse<{ success: boolean; message: string }>> {
+    return this.sendCommand<{ success: boolean; message: string }>({
+      action: 'stop',
+      device: 'ai_vision',
+      request_id: `ai_vision_stop_${Date.now()}`,
+    });
+  }
+
+  async setAIVisionConfidence(confidence: number): Promise<APIResponse<{ success: boolean; confidence: number }>> {
+    return this.sendCommand<{ success: boolean; confidence: number }>({
+      action: 'set_confidence',
+      device: 'ai_vision',
+      params: { confidence },
+      request_id: `ai_vision_confidence_${Date.now()}`,
+    });
+  }
+
+  async getAIVisionFrame(): Promise<APIResponse<{ frame: string; timestamp: number }>> {
+    return this.sendCommand<{ frame: string; timestamp: number }>({
+      action: 'get_frame',
+      device: 'ai_vision',
+      request_id: `ai_vision_frame_${Date.now()}`,
+    });
+  }
+
+  async getAIVisionDetections(): Promise<APIResponse<DetectionResult[]>> {
+    return this.sendCommand<DetectionResult[]>({
+      action: 'get_detections',
+      device: 'ai_vision',
+      request_id: `ai_vision_detections_${Date.now()}`,
+    });
+  }
+
+  async getAvailableModels(): Promise<APIResponse<{ models: string[] }>> {
+    return this.sendCommand<{ models: string[] }>({
+      action: 'get_available_models',
+      device: 'ai_vision',
+      request_id: `ai_vision_models_${Date.now()}`,
     });
   }
 

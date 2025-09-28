@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 AI-Vision System for CM5 Maker Desk
@@ -358,15 +359,20 @@ class AIVisionSystem:
         """Initialize the AI-Vision system"""
         logger.info("Initializing AI-Vision system...")
 
-        # Load YOLO model
-        if not self.inference_engine.load_model(model_name):
-            return False
-
-        # Detect cameras
+        # Always detect cameras first
         cameras = self.camera_manager.detect_cameras()
         logger.info(f"Found {len(cameras)} cameras")
 
-        return True
+        # Try to load YOLO model, but don't fail if unavailable
+        if YOLO_AVAILABLE:
+            if self.inference_engine.load_model(model_name):
+                logger.info("YOLO model loaded successfully")
+            else:
+                logger.warning("YOLO model failed to load, camera-only mode")
+        else:
+            logger.info("YOLO not available - camera detection only")
+
+        return True  # Always return True if cameras are detected
 
     def start(self, camera_id: int = 0) -> bool:
         """Start AI-Vision processing"""
@@ -423,11 +429,16 @@ class AIVisionSystem:
                 # Capture frame
                 frame = self.camera_manager.capture_frame()
                 if frame is None:
+                    logger.warning("Frame capture returned None, retrying...")
                     time.sleep(0.1)
                     continue
 
-                # Run inference
-                detections = self.inference_engine.detect(frame)
+                logger.debug(f"Captured frame: {frame.shape if frame is not None else 'None'}")
+
+                # Run inference (only if YOLO is available)
+                detections = []
+                if self.inference_engine.model:
+                    detections = self.inference_engine.detect(frame)
 
                 # Update statistics
                 self.fps_counter += 1
@@ -441,8 +452,10 @@ class AIVisionSystem:
                     self.total_detections += len(detections)
                     self.last_detection_time = current_time
 
-                # Draw detections on frame
-                annotated_frame = self.inference_engine.draw_detections(frame.copy(), detections)
+                # Draw detections on frame (if any)
+                annotated_frame = frame.copy()
+                if detections and self.inference_engine.model:
+                    annotated_frame = self.inference_engine.draw_detections(annotated_frame, detections)
 
                 # Store latest frame and detections
                 with self.frame_lock:
