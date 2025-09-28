@@ -26,6 +26,9 @@ sudo reboot
 # After reboot, test the setup
 ./test-setup.sh
 
+# Optional: Optimize NVMe performance (if you have slow SSD speeds)
+sudo ./optimize-nvme.sh
+
 # Start the HMI system
 ./start-hmi.sh
 ```
@@ -316,6 +319,12 @@ python hmi_json_api.py server --debug
 - **CPU**: ~15% on idle, ~30% under load
 - **Storage**: ~50MB application data
 - **Network**: Local interfaces only
+
+### NVMe Performance Optimization
+- **Issue**: Default PCIe configuration may limit NVMe SSD performance
+- **Symptoms**: Low speed test results (< 1000 MB/s on high-end SSDs)
+- **Solution**: Run `sudo ./optimize-nvme.sh` to fix PCIe link negotiation
+- **Expected**: Up to 10x performance improvement (3,000+ MB/s write, 6,000+ MB/s read)
 
 ## 🤝 Contributing
 
