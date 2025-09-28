@@ -75,6 +75,15 @@ except ImportError as e:
     print(f"Warning: DIAG Agent not available: {e}")
     DIAG_AGENT_AVAILABLE = False
 
+# Import Audio System
+try:
+    from audio_system import get_audio_system, AudioSystem, AudioBackend
+    AUDIO_SYSTEM_AVAILABLE = True
+    print("Audio system available")
+except ImportError as e:
+    print(f"Warning: Audio system not available: {e}")
+    AUDIO_SYSTEM_AVAILABLE = False
+
 @dataclass
 class DeviceStatus:
     """Standard device status structure"""

@@ -132,6 +132,9 @@ add_config_setting "gpu_mem=64" "Reserve minimal GPU memory for headless operati
 # Enable camera interface (for AI-Vision system)
 add_config_setting "dtparam=camera=on" "Enable camera interface for AI-Vision"
 
+# Enable audio interface (for audio output control)
+add_config_setting "dtparam=audio=on" "Enable audio interface for system audio control"
+
 # Enable hardware watchdog
 add_config_setting "dtparam=watchdog=on" "Enable hardware watchdog"
 
@@ -160,6 +163,11 @@ SYSTEM_PACKAGES=(
     "libudev-dev"
     "pkg-config"
     "cmake"
+    "alsa-utils"
+    "pulseaudio"
+    "pulseaudio-utils"
+    "libasound2-dev"
+    "portaudio19-dev"
 )
 
 for package in "${SYSTEM_PACKAGES[@]}"; do
@@ -214,7 +222,7 @@ if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
     print_success "✅ Python dependencies installed from requirements.txt"
 else
     print_warning "requirements.txt not found, installing basic dependencies..."
-    pip install flask flask-cors smbus2 python-can websockets requests anthropic schedule psutil
+    pip install flask flask-cors smbus2 python-can websockets requests anthropic schedule psutil pyaudio
 fi
 
 deactivate
@@ -427,7 +435,8 @@ print_success "🎉 Raspberry Pi CM5 HMI System Setup Complete!"
 echo "================================================="
 echo ""
 echo "📋 Configuration Summary:"
-echo "  • Hardware interfaces enabled (I2C, SPI, GPIO, CAN)"
+echo "  • Hardware interfaces enabled (I2C, SPI, GPIO, CAN, Camera, Audio)"
+echo "  • Audio system configured (ALSA, PulseAudio)"
 echo "  • Python virtual environment created: cm5-venv/"
 echo "  • System dependencies installed"
 echo "  • User permissions configured"
