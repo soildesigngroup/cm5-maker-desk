@@ -7,7 +7,6 @@ import { FanController } from '@/components/hmi/FanController';
 import { RTCDisplay } from '@/components/hmi/RTCDisplay';
 import { ConnectionSettings } from '@/components/hmi/ConnectionSettings';
 import { AIVision } from '@/components/hmi/AIVision';
-import { CameraStreaming } from '@/components/hmi/CameraStreaming';
 import { CAN } from '@/components/hmi/CAN';
 import { AudioOutput } from '@/components/hmi/AudioOutput';
 import { Automation } from '@/components/hmi/Automation';
@@ -15,7 +14,7 @@ import { DiagAgent } from '@/components/hmi/DiagAgent';
 import StorageMonitor from '@/components/hmi/StorageMonitor';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Cpu, BarChart3, ToggleLeft, Fan, Clock, Settings, Menu, Eye, Camera, Radio, Volume2, Zap, Stethoscope, HardDrive } from 'lucide-react';
+import { Cpu, BarChart3, ToggleLeft, Fan, Clock, Settings, Menu, Eye, Radio, Volume2, Zap, Stethoscope, HardDrive } from 'lucide-react';
 
 const Index = () => {
   const [apiService, setApiService] = useState(new HMIApiService());
@@ -62,7 +61,7 @@ const Index = () => {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-12 lg:w-auto lg:grid-cols-13">
+          <TabsList className="grid w-full grid-cols-11 lg:w-auto lg:grid-cols-12">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <Menu className="w-4 h-4" />
               <span className="hidden sm:inline">Overview</span>
@@ -99,10 +98,6 @@ const Index = () => {
               <Eye className="w-4 h-4" />
               <span className="hidden sm:inline">AI-Vision</span>
             </TabsTrigger>
-            <TabsTrigger value="camera_streaming" className="flex items-center gap-2">
-              <Camera className="w-4 h-4" />
-              <span className="hidden sm:inline">Cameras</span>
-            </TabsTrigger>
             <TabsTrigger value="automation" className="flex items-center gap-2">
               <Zap className="w-4 h-4" />
               <span className="hidden sm:inline">Automation</span>
@@ -118,13 +113,11 @@ const Index = () => {
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6 animate-fade-in">
-            <div className="grid gap-6">
+            <div className="space-y-6">
               <SystemStatus apiService={apiService} />
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                <ADCMonitor apiService={apiService} />
-                <FanController apiService={apiService} />
-                <StorageMonitor />
-              </div>
+              <ADCMonitor apiService={apiService} />
+              <FanController apiService={apiService} />
+              <StorageMonitor />
             </div>
           </TabsContent>
 
@@ -158,10 +151,6 @@ const Index = () => {
 
           <TabsContent value="ai_vision" className="animate-fade-in">
             <AIVision apiService={apiService} />
-          </TabsContent>
-
-          <TabsContent value="camera_streaming" className="animate-fade-in">
-            <CameraStreaming />
           </TabsContent>
 
           <TabsContent value="automation" className="animate-fade-in">
