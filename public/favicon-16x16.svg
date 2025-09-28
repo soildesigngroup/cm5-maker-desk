@@ -1,0 +1,33 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Rounded square background with primary color -->
+  <rect width="16" height="16" rx="4" fill="hsl(187, 85%, 53%)"/>
+
+  <!-- CPU/Chip icon simplified for 16x16 -->
+  <g transform="translate(4, 4)" fill="hsl(217, 19%, 8%)">
+    <!-- Main chip body -->
+    <rect x="2" y="2" width="4" height="4" rx="0.5" fill="currentColor"/>
+
+    <!-- Top pins -->
+    <rect x="2.5" y="0.5" width="0.5" height="1" fill="currentColor"/>
+    <rect x="3.5" y="0.5" width="0.5" height="1" fill="currentColor"/>
+    <rect x="4.5" y="0.5" width="0.5" height="1" fill="currentColor"/>
+
+    <!-- Bottom pins -->
+    <rect x="2.5" y="6.5" width="0.5" height="1" fill="currentColor"/>
+    <rect x="3.5" y="6.5" width="0.5" height="1" fill="currentColor"/>
+    <rect x="4.5" y="6.5" width="0.5" height="1" fill="currentColor"/>
+
+    <!-- Left pins -->
+    <rect x="0.5" y="2.5" width="1" height="0.5" fill="currentColor"/>
+    <rect x="0.5" y="3.5" width="1" height="0.5" fill="currentColor"/>
+    <rect x="0.5" y="4.5" width="1" height="0.5" fill="currentColor"/>
+
+    <!-- Right pins -->
+    <rect x="6.5" y="2.5" width="1" height="0.5" fill="currentColor"/>
+    <rect x="6.5" y="3.5" width="1" height="0.5" fill="currentColor"/>
+    <rect x="6.5" y="4.5" width="1" height="0.5" fill="currentColor"/>
+
+    <!-- Inner detail -->
+    <rect x="3" y="3" width="2" height="2" fill="hsl(187, 85%, 53%)"/>
+  </g>
+</svg>
