@@ -117,7 +117,7 @@ export function Automation({ apiService }: AutomationProps) {
     try {
       const response = await apiService.listEnvironments();
       if (response.success && response.data) {
-        setEnvironments(response.data);
+        setEnvironments(response.data.environments);
       }
     } catch (error) {
       console.error('Failed to fetch environments:', error);
@@ -128,7 +128,7 @@ export function Automation({ apiService }: AutomationProps) {
     try {
       const response = await apiService.listCollections();
       if (response.success && response.data) {
-        setCollections(response.data);
+        setCollections(response.data.collections);
       }
     } catch (error) {
       console.error('Failed to fetch collections:', error);
@@ -139,7 +139,7 @@ export function Automation({ apiService }: AutomationProps) {
     try {
       const response = await apiService.listJsonLibraries();
       if (response.success && response.data) {
-        setJsonLibraries(response.data);
+        setJsonLibraries(response.data.libraries);
       }
     } catch (error) {
       console.error('Failed to fetch JSON libraries:', error);
@@ -155,7 +155,7 @@ export function Automation({ apiService }: AutomationProps) {
         variables = JSON.parse(newEnvVariables);
       }
 
-      const response = await apiService.createEnvironment(newEnvName, newEnvBaseUrl, variables);
+      const response = await apiService.createEnvironment(newEnvName, variables, newEnvBaseUrl);
       if (response.success) {
         await fetchEnvironments();
         setShowNewEnvironmentDialog(false);

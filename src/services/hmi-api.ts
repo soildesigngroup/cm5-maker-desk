@@ -552,7 +552,7 @@ export class HMIApiService {
     });
   }
 
-  // AI-Vision Commands
+  // AI-Vision Commands  
   async getAIVisionStatus(): Promise<APIResponse<AIVisionStatus>> {
     return this.sendCommand<AIVisionStatus>({
       action: 'get_status',
@@ -562,18 +562,15 @@ export class HMIApiService {
   }
 
   async listCameras(): Promise<APIResponse<{ cameras: CameraInfo[] }>> {
-    return this.sendCommand({
+    return this.sendCommand<{ cameras: CameraInfo[] }>({
       action: 'list_cameras',
       device: 'ai_vision',
       request_id: `ai_vision_cameras_${Date.now()}`,
     });
   }
 
-  async startAIVision(
-    cameraId: number = 0,
-    modelName: string = 'yolo11n.pt'
-  ): Promise<APIResponse<{ active: boolean; camera_id: number; model_name: string }>> {
-    return this.sendCommand({
+  async startAIVision(cameraId: number, modelName?: string): Promise<APIResponse<{ success: boolean; message: string }>> {
+    return this.sendCommand<{ success: boolean; message: string }>({
       action: 'start',
       device: 'ai_vision',
       params: { camera_id: cameraId, model_name: modelName },
@@ -581,16 +578,16 @@ export class HMIApiService {
     });
   }
 
-  async stopAIVision(): Promise<APIResponse<{ active: boolean }>> {
-    return this.sendCommand({
+  async stopAIVision(): Promise<APIResponse<{ success: boolean; message: string }>> {
+    return this.sendCommand<{ success: boolean; message: string }>({
       action: 'stop',
       device: 'ai_vision',
       request_id: `ai_vision_stop_${Date.now()}`,
     });
   }
 
-  async setConfidenceThreshold(confidence: number): Promise<APIResponse<{ confidence_threshold: number }>> {
-    return this.sendCommand({
+  async setAIVisionConfidence(confidence: number): Promise<APIResponse<{ success: boolean; confidence: number }>> {
+    return this.sendCommand<{ success: boolean; confidence: number }>({
       action: 'set_confidence',
       device: 'ai_vision',
       params: { confidence },
@@ -598,25 +595,24 @@ export class HMIApiService {
     });
   }
 
-  async getAIVisionFrame(): Promise<APIResponse<{ frame: string; format: string; active: boolean }>> {
-    return this.sendCommand({
+  async getAIVisionFrame(): Promise<APIResponse<{ frame: string; timestamp: number }>> {
+    return this.sendCommand<{ frame: string; timestamp: number }>({
       action: 'get_frame',
       device: 'ai_vision',
       request_id: `ai_vision_frame_${Date.now()}`,
     });
   }
 
-  async getDetections(maxCount: number = 10): Promise<APIResponse<{ detections: DetectionResult[]; count: number }>> {
-    return this.sendCommand({
+  async getAIVisionDetections(): Promise<APIResponse<DetectionResult[]>> {
+    return this.sendCommand<DetectionResult[]>({
       action: 'get_detections',
       device: 'ai_vision',
-      params: { max_count: maxCount },
       request_id: `ai_vision_detections_${Date.now()}`,
     });
   }
 
-  async getAvailableModels(): Promise<APIResponse<{ available_models: string[] }>> {
-    return this.sendCommand({
+  async getAvailableModels(): Promise<APIResponse<{ models: string[] }>> {
+    return this.sendCommand<{ models: string[] }>({
       action: 'get_available_models',
       device: 'ai_vision',
       request_id: `ai_vision_models_${Date.now()}`,
@@ -1109,72 +1105,6 @@ export class HMIApiService {
     });
   }
 
-  // AI-Vision Commands
-  async getAIVisionStatus(): Promise<APIResponse<AIVisionStatus>> {
-    return this.sendCommand<AIVisionStatus>({
-      action: 'get_status',
-      device: 'ai_vision',
-      request_id: `ai_vision_status_${Date.now()}`,
-    });
-  }
-
-  async listCameras(): Promise<APIResponse<{ cameras: CameraInfo[] }>> {
-    return this.sendCommand<{ cameras: CameraInfo[] }>({
-      action: 'list_cameras',
-      device: 'ai_vision',
-      request_id: `ai_vision_cameras_${Date.now()}`,
-    });
-  }
-
-  async startAIVision(cameraId: number, modelName?: string): Promise<APIResponse<{ success: boolean; message: string }>> {
-    return this.sendCommand<{ success: boolean; message: string }>({
-      action: 'start',
-      device: 'ai_vision',
-      params: { camera_id: cameraId, model_name: modelName },
-      request_id: `ai_vision_start_${Date.now()}`,
-    });
-  }
-
-  async stopAIVision(): Promise<APIResponse<{ success: boolean; message: string }>> {
-    return this.sendCommand<{ success: boolean; message: string }>({
-      action: 'stop',
-      device: 'ai_vision',
-      request_id: `ai_vision_stop_${Date.now()}`,
-    });
-  }
-
-  async setAIVisionConfidence(confidence: number): Promise<APIResponse<{ success: boolean; confidence: number }>> {
-    return this.sendCommand<{ success: boolean; confidence: number }>({
-      action: 'set_confidence',
-      device: 'ai_vision',
-      params: { confidence },
-      request_id: `ai_vision_confidence_${Date.now()}`,
-    });
-  }
-
-  async getAIVisionFrame(): Promise<APIResponse<{ frame: string; timestamp: number }>> {
-    return this.sendCommand<{ frame: string; timestamp: number }>({
-      action: 'get_frame',
-      device: 'ai_vision',
-      request_id: `ai_vision_frame_${Date.now()}`,
-    });
-  }
-
-  async getAIVisionDetections(): Promise<APIResponse<DetectionResult[]>> {
-    return this.sendCommand<DetectionResult[]>({
-      action: 'get_detections',
-      device: 'ai_vision',
-      request_id: `ai_vision_detections_${Date.now()}`,
-    });
-  }
-
-  async getAvailableModels(): Promise<APIResponse<{ models: string[] }>> {
-    return this.sendCommand<{ models: string[] }>({
-      action: 'get_available_models',
-      device: 'ai_vision',
-      request_id: `ai_vision_models_${Date.now()}`,
-    });
-  }
 
   // Connection Test
   async testConnection(): Promise<boolean> {
